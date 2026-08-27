@@ -21,6 +21,14 @@ Publish an open-source Pi extension package that maps the Pi lifecycle and tool 
 
 The first release is an **experimental ACS v0.1 Pi adapter**. It is useful if it can demonstrably observe the supported hooks, fail closed where configured, and apply a Guardian denial or valid modification to the same tool invocation Pi executes.
 
+## Current implementation checkpoint — 2026-08-27
+
+The repository now contains a working alpha against ACS revision `c7ad162f69386daac94b89073e3b751e8cdf28b2` and Pi `0.84.3` / revision `4e494929998d6bc4fccf75e0a233f727db4b70ee`.
+
+Implemented and test-backed: offline schema validation, strict configuration, signed HTTP(S) transport, handshake negotiation, allow/deny tool enforcement, validated argument overrides, human ASK, bounded DEFER timeout handling, tool-result gating, user/final-response mediation, session lifecycle events, correlation, optional payload-off audit records, and a local demo Guardian.
+
+The alpha deliberately advertises no ACS conformance profile. It does not yet meet the whole `acs-core` profile because wrapped MCP, complete SessionContext construction, and fully interoperable ASK/DEFER resolution are still missing. The precise boundary is maintained in `docs/coverage.md`.
+
 ## Non-goals for v0.1
 
 - Creating a new policy language, Guardian product, dashboard, SIEM integration, or AgBOM generator.
@@ -59,8 +67,8 @@ pi-acs-core/
   src/
     index.ts                 Pi extension factory and configuration loading
     config.ts                strict local configuration schema
-    acs-client.ts            Guardian transport, timeout, request IDs
-    acs-schema.ts            pinned schema validator and typed boundary values
+    client.ts                Guardian transport, timeout, request IDs
+    schema.ts                pinned schema validator and typed boundary values
     mapper.ts                Pi-event to ACS request mapping
     enforcer.ts              verdict handling and safe tool-input replacement
     audit.ts                 optional local structured event sink
@@ -124,19 +132,19 @@ Each numbered task is intentionally bounded to roughly 40–50% of a typical mod
 
 ### Phase 0 — Freeze the contracts
 
-**0.1 — Create the package skeleton.**
+**0.1 — Create the package skeleton.** Completed.
 
-Create a new repository/package with TypeScript, Pi extension manifest, test runner, formatting, MIT license decision, and a terse README stating that it is experimental. Do not add ACS behavior yet.
+Create a new repository/package with TypeScript, Pi extension manifest, test runner, license decision, and a terse README stating that it is experimental. Do not add ACS behavior yet.
 
 Acceptance: `npm test` and type checking run; Pi can discover and load a no-op extension from the package.
 
-**0.2 — Vendor or pin the ACS-Core schema deliberately.**
+**0.2 — Vendor or pin the ACS-Core schema deliberately.** Completed.
 
 Record the ACS repository commit or release used, its license, the specific JSON schema entry point, and every schema file needed for reference resolution. Add a small validation test for one canonical request and response fixture.
 
 Acceptance: schema validation runs offline and fails on a deliberately malformed envelope. The README names the exact ACS revision, not merely “latest.”
 
-**0.3 — Write the adapter coverage contract.**
+**0.3 — Write the adapter coverage contract.** Completed for the current alpha.
 
 Inspect the pinned ACS hook and verdict schemas plus the Pi version's extension types. Create `docs/coverage.md`: for every ACS-Core hook, name its Pi event, whether it is observe/enforce/unsupported, what data is lost, and why.
 
@@ -253,12 +261,10 @@ Acceptance: tag, npm publish, and external announcements are separate human-auth
 - The repository contains a runnable local demo Guardian and negative tests.
 - Documentation says “experimental adapter,” names its supported Pi and ACS versions, and directly states unsupported/unsafe boundaries.
 
-## Questions to resolve before implementation begins
+## Resolved implementation decisions
 
-1. Which ACS revision and branch are the canonical target for this effort today?
-2. Does ACS-Core's current response schema define `ask`, `defer`, and `modify` as first-class outcomes, and which are normative versus proposed?
-3. Should the initial Guardian transport be HTTP only, an in-process interface only, or both behind one client abstraction?
-4. Should default enforcement be fail closed, or should the first demo default to observe mode until the operator opts in?
-5. Is a Rockwood Lab GitHub organization/package namespace available and wanted, or should the project start under a personal namespace?
-
-Do not block Phase 0.1 on these questions. Block each later decision only where it changes a published protocol, enforcement default, or package identity.
+1. Canonical target: ACS v0.1.0 at commit `c7ad162f69386daac94b89073e3b751e8cdf28b2`.
+2. ALLOW, DENY, MODIFY, ASK, and DEFER are all normative v0.1 decisions. The alpha implements a documented subset of modification and escalation semantics and fails closed on unsupported shapes.
+3. Initial transport: HTTP(S) JSON-RPC, with HMAC required in enforcement mode.
+4. Default mode: observe. Enforcement is opt-in and requires an explicit startup posture.
+5. Repository/package identity: personal GitHub repository and provisional package name `@brentrockwood/pi-acs-core`; no npm publication is authorized yet.

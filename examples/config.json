@@ -1,0 +1,20 @@
+{
+  "mode": "enforce",
+  "startupPosture": "refuse",
+  "guardian": {
+    "url": "http://127.0.0.1:8787/",
+    "connectTimeoutMs": 2000,
+    "maxResponseBytes": 1048576,
+    "hmacKeyEnv": "PI_ACS_DEMO_KEY",
+    "keyId": "pi-acs-demo"
+  },
+  "audit": {
+    "path": "./acs-events.jsonl",
+    "includePayloads": false
+  },
+  "agent": {
+    "id": "pi-demo",
+    "name": "Pi ACS demo",
+    "environment": "development"
+  }
+}

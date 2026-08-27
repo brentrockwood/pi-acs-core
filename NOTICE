@@ -1,0 +1,6 @@
+Pi ACS-Core adapter
+Copyright 2026 Brent Rockwood
+
+This product includes Agent Control Standard JSON schemas from the OWASP
+GenAI Security Project, licensed under the Apache License 2.0. The pinned
+upstream revision and original notices are recorded under vendor/acs/.

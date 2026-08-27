@@ -1,0 +1,8 @@
+node_modules/
+acs-events.jsonl
+coverage/
+dist/
+*.log
+.DS_Store
+.pi/acs-events.jsonl
+.pi/acs-core.json
