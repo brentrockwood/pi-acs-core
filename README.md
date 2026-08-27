@@ -111,6 +111,8 @@ npm run check
 npm audit --omit=dev
 ```
 
-The suite covers schema rejection, strict configuration, signed correlation, transport failures, tool denial, exact-object modification, human ASK, parallel tool-result correlation, and payload-off audit records. A local pre-commit hook scans staged content with TruffleHog; enable it with `git config core.hooksPath .githooks` after cloning.
+The suite covers schema rejection, strict configuration, signed correlation, transport failures, tool denial, exact-object modification, human ASK, parallel tool-result correlation, and payload-off audit records. Its black-box end-to-end test launches the pinned Pi CLI with this extension, a deterministic local model fixture, and a loopback HTTP Guardian. It proves that Pi's real Bash tool executes an allowed command, does not execute a denied command, and executes Guardian-modified arguments instead of the model's original arguments. It requires no model credentials or external network access.
+
+Run that test alone with `npm run test:e2e`. It is also included in `npm test` and CI. A local pre-commit hook scans staged content with TruffleHog; enable it with `git config core.hooksPath .githooks` after cloning.
 
 Apache-2.0. The vendored ACS schemas retain their upstream license and notice; see [vendor/acs/UPSTREAM.md](vendor/acs/UPSTREAM.md).

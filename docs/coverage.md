@@ -58,8 +58,9 @@ Automated tests currently establish:
 - configured HMAC signatures and both correlation IDs are checked;
 - an explicit DENY returns Pi's pre-execution block result;
 - a valid override changes the original input object and an invalid override does not partially mutate it;
+- the pinned real Pi CLI loads the extension and routes model-originated Bash calls through it: ALLOW produces the expected filesystem side effect, DENY prevents it, and MODIFY causes the real tool to receive the replacement command;
 - two concurrent allowed tool calls keep distinct result correlations;
 - malformed or timed-out Guardian responses reach the configured decision-failure path;
 - default audit records omit payload bodies.
 
-They do not establish containment, universal Pi event coverage, policy quality, Guardian correctness, OWASP approval, or ACS-Core conformance.
+The end-to-end fixture uses a deterministic local model server and a loopback Guardian implemented with this repository's test helpers; it establishes Pi adapter behavior, not independent Guardian interoperability or real-model reliability. The tests do not establish containment, universal Pi event coverage, policy quality, Guardian correctness, OWASP approval, or ACS-Core conformance.
