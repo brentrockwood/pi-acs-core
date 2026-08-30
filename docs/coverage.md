@@ -3,10 +3,10 @@
 Target contracts:
 
 - ACS schema version: `0.1.0`
-- ACS source revision: `c7ad162f69386daac94b89073e3b751e8cdf28b2`
+- ACS source revision: `aae26f823b44a76ec930180aab477da3baa76634` (open upstream PR #22 head)
 - Pi package and extension API: `@earendil-works/pi-coding-agent` `0.84.3`, source revision `4e494929998d6bc4fccf75e0a233f727db4b70ee`
 
-The adapter advertises only methods it emits. It currently sends no `profiles_supported` values. In particular, it does not claim `acs-core`: ACS-Core also requires wrapped MCP, a complete SessionContext chain, and fully interoperable handling of every disposition. Shipping useful enforcement without that label is more accurate than treating the six minimum hooks as the entire profile.
+The adapter advertises only methods it emits. It currently sends no `profiles_supported` values. In particular, it does not claim `acs-core`. The recorded behavior below is not a conformance assertion.
 
 ## Instrument and system methods
 
@@ -42,9 +42,19 @@ The adapter advertises only methods it emits. It currently sends no `profiles_su
 
 ## Integrity and chain state
 
-Requests and responses, except `system/ping`, use HMAC-SHA256 when configured. Enforcement mode refuses unsigned configuration. The client verifies JSON-RPC ID, ACS `request_id`, signature key ID, response signature, selected transport, negotiated version, accepted profiles, and evaluated-method subset.
+Requests and decision responses, except `system/ping`, use HMAC-SHA256 when configured. A signed JSON-RPC error envelope is also verified before the client surfaces its error; a missing or invalid error signature fails as a signature error. Enforcement mode refuses unsigned configuration. The client verifies JSON-RPC ID, ACS `request_id` where present, signature key ID, response/error signature, selected transport, negotiated version, accepted profiles, and evaluated-method subset.
 
 When a Guardian returns `chain_hash`, the adapter propagates it as the next request's `metadata.session_state.chain_hash` and includes the last value at session end. It does not construct or persist the Guardian's append-only ContextEntry chain and therefore does not claim full SessionContext conformance or ACS-Audit.
+
+## Pending ACS-Core changes in upstream PR #21
+
+PR #21 is open as of this matrix. This adapter does not claim that its proposed rules are current ACS requirements or that it satisfies them.
+
+- Pi's partial, schema-validated `MODIFY` handling remains an adapter behavior. If `MODIFY` becomes a SHOULD, it would not cure any other conformance gap.
+- `system/ping` is already implemented. If it becomes a SHOULD, this does not expand the adapter's claim.
+- Raw `protocols/MCP/*` remains absent. A deployment that uses MCP cannot infer wrapped-MCP coverage from normalized Pi tool calls; only a deployment that genuinely does not use MCP could avoid that proposed conditional requirement.
+- Pi exposes no built-in subagent lifecycle to this adapter, and it emits neither `steps/subagentStart` nor `steps/subagentStop`. The adapter does not assert the proposed vacuity exception for third-party extensions that create child agents.
+- Complete SessionContext persistence, full lifecycle coverage, and the exact end-to-end behavior required for a profile remain unproven.
 
 ## Parallel calls
 
@@ -55,7 +65,7 @@ Pi preflights sibling tool calls through `tool_call` and may execute allowed sib
 Automated tests currently establish:
 
 - generated requests and received responses are rejected when the vendored schema says they are malformed;
-- configured HMAC signatures and both correlation IDs are checked;
+- configured HMAC signatures, including signed JSON-RPC error envelopes, and applicable correlation IDs are checked;
 - an explicit DENY returns Pi's pre-execution block result;
 - a valid override changes the original input object and an invalid override does not partially mutate it;
 - the pinned real Pi CLI loads the extension and routes model-originated Bash calls through it: ALLOW produces the expected filesystem side effect, DENY prevents it, and MODIFY causes the real tool to receive the replacement command;

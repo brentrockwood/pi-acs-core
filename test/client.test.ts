@@ -87,6 +87,28 @@ describe("Guardian client", () => {
     await expect(acs.handshake(state)).rejects.toMatchObject({ kind: "signature" });
   });
 
+  it("verifies signed JSON-RPC error envelopes before surfacing the error", async () => {
+    guardian = createGuardian((request) => request.method === "steps/toolCallRequest"
+      ? { error: { code: -32001, message: "Guardian rejected the request" } }
+      : {});
+    vi.stubGlobal("fetch", guardian.fetch);
+    const state = newSessionState();
+    const acs = client(guardian.url);
+    state.handshake = await acs.handshake(state);
+    await expect(acs.request(state, "steps/toolCallRequest", toolCallPayload("bash", { command: "pwd" })))
+      .rejects.toMatchObject({ kind: "guardian_error", message: "Guardian rejected the request" });
+
+    const originalFetch = guardian.fetch;
+    vi.stubGlobal("fetch", async (input: RequestInfo | URL, init?: RequestInit) => {
+      const response = await originalFetch(input, init);
+      const value = await response.json() as { error?: { signature?: unknown } };
+      if (value.error) delete value.error.signature;
+      return Response.json(value);
+    });
+    await expect(acs.request(state, "steps/toolCallRequest", toolCallPayload("bash", { command: "pwd" })))
+      .rejects.toMatchObject({ kind: "signature" });
+  });
+
   it("serializes same-session requests so the next request carries the prior chain head", async () => {
     let sequence = 0;
     guardian = createGuardian((request) => request.method === "steps/toolCallRequest"

@@ -62,6 +62,7 @@ export interface AcsError {
   code: number;
   message: string;
   data?: unknown;
+  signature?: AcsSignature;
 }
 
 export interface AcsResponseEnvelope {
