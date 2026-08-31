@@ -1,4 +1,6 @@
 export const ACS_VERSION = "0.1.0" as const;
+export const PI_VERSION = "0.84.3" as const;
+export const ADAPTER_VERSION = "0.1.0-alpha.1" as const;
 
 export type JsonPrimitive = string | number | boolean | null;
 export type JsonValue = JsonPrimitive | JsonValue[] | { [key: string]: JsonValue };

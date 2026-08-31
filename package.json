@@ -26,6 +26,8 @@
   },
   "scripts": {
     "check": "npm run typecheck && npm test",
+    "lint": "eslint .",
+    "prepare": "node scripts/install-git-hooks.mjs",
     "typecheck": "tsc --noEmit",
     "test": "vitest run",
     "test:e2e": "vitest run test/pi-runtime.e2e.test.ts",
@@ -44,8 +46,11 @@
   "devDependencies": {
     "@earendil-works/pi-coding-agent": "0.84.3",
     "@types/node": "26.0.0",
+    "eslint": "9.39.5",
+    "globals": "16.5.0",
     "tsx": "4.20.5",
     "typescript": "5.9.2",
+    "typescript-eslint": "8.68.0",
     "vitest": "3.2.7"
   },
   "dependencies": {

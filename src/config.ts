@@ -5,6 +5,7 @@ import { isAbsolute, join, resolve } from "node:path";
 export interface AcsConfig {
   mode: "observe" | "enforce";
   startupPosture: "proceed" | "refuse";
+  enableModify: boolean;
   guardian: {
     url: string;
     connectTimeoutMs: number;
@@ -47,13 +48,16 @@ function positiveInteger(value: unknown, fallback: number, label: string): numbe
 
 export function parseConfig(value: unknown, cwd: string): AcsConfig {
   assertObject(value, "configuration");
-  assertKeys(value, ["mode", "startupPosture", "guardian", "audit", "agent"], "configuration");
+  assertKeys(value, ["mode", "startupPosture", "enableModify", "guardian", "audit", "agent"], "configuration");
 
   const mode = value.mode ?? "observe";
   if (mode !== "observe" && mode !== "enforce") throw new Error("mode must be observe or enforce");
   const startupPosture = value.startupPosture ?? "proceed";
   if (startupPosture !== "proceed" && startupPosture !== "refuse") {
     throw new Error("startupPosture must be proceed or refuse");
+  }
+  if (value.enableModify !== undefined && typeof value.enableModify !== "boolean") {
+    throw new Error("enableModify must be a boolean");
   }
 
   assertObject(value.guardian, "guardian");
@@ -119,6 +123,7 @@ export function parseConfig(value: unknown, cwd: string): AcsConfig {
   return {
     mode,
     startupPosture,
+    enableModify: value.enableModify === true,
     guardian: {
       url: url.toString(),
       connectTimeoutMs: positiveInteger(value.guardian.connectTimeoutMs, 2_000, "guardian.connectTimeoutMs"),

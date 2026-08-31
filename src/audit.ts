@@ -1,12 +1,15 @@
 import { appendFile, mkdir } from "node:fs/promises";
 import { dirname } from "node:path";
 import type { AcsConfig } from "./config.js";
+import { ACS_VERSION, ADAPTER_VERSION, PI_VERSION } from "./types.js";
 
 export interface AuditEvent {
   event: string;
   session_id?: string;
+  call_id?: string;
   request_id?: string;
   method?: string;
+  tool?: string;
   decision?: string;
   failure_kind?: string;
   message?: string;
@@ -21,6 +24,9 @@ export class AuditSink {
     if (!this.config.path) return;
     const record = {
       timestamp: new Date().toISOString(),
+      adapter_version: ADAPTER_VERSION,
+      pi_version: PI_VERSION,
+      acs_version: ACS_VERSION,
       ...event,
       ...(!this.config.includePayloads && "payload" in event ? { payload: "[omitted]" } : {}),
     };

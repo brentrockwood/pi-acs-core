@@ -6,6 +6,8 @@
 # verification endpoint is unavailable.
 set -euo pipefail
 
+npm run lint
+
 if ! command -v trufflehog >/dev/null 2>&1; then
   echo "pre-commit: trufflehog is required but was not found on PATH." >&2
   exit 1

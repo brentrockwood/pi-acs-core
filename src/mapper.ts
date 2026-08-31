@@ -1,7 +1,7 @@
 import { randomBytes, randomUUID } from "node:crypto";
 import type { AcsConfig } from "./config.js";
 import type { AcsRequestEnvelope, JsonObject, JsonValue, SessionState } from "./types.js";
-import { ACS_VERSION } from "./types.js";
+import { ACS_VERSION, PI_VERSION } from "./types.js";
 
 export const METHODS_IMPLEMENTED = [
   "steps/sessionStart",
@@ -46,7 +46,7 @@ export function buildRequest(
         ...(state.chainHash ? { session_state: { chain_hash: state.chainHash } } : {}),
         environment: config.agent.environment,
         platform: "pi",
-        platform_version: "0.84.x",
+        platform_version: PI_VERSION,
       },
       payload,
     },

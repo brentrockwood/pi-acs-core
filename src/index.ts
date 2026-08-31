@@ -104,11 +104,12 @@ async function resolveDefer(result: AcsResult, ctx: ExtensionContext): Promise<G
   return { action: "deny", reason: result.reasoning ?? "Guardian deferral expired" };
 }
 
-async function resolveDecision(result: AcsResult, ctx: ExtensionContext): Promise<GateOutcome> {
+async function resolveDecision(result: AcsResult, ctx: ExtensionContext, enableModify: boolean): Promise<GateOutcome> {
   if (result.decision === "allow") return { action: "allow" };
   if (result.decision === "deny") return { action: "deny", reason: blockingReason(result) ?? "Denied by ACS Guardian" };
   if (result.decision === "ask") return resolveAsk(result, ctx);
   if (result.decision === "defer") return resolveDefer(result, ctx);
+  if (!enableModify) return { action: "deny", reason: "Guardian returned MODIFY but modification is disabled" };
   if (!result.modifications) return { action: "deny", reason: "Guardian returned MODIFY without modifications" };
   return { action: "modify", modifications: result.modifications };
 }
@@ -187,7 +188,7 @@ export default function acsCoreExtension(pi: ExtensionAPI): void {
     try {
       const result = await request(method, payload);
       if (!result) return { action: "allow" };
-      const outcome = await resolveDecision(result, ctx);
+      const outcome = await resolveDecision(result, ctx, config?.enableModify === true);
       return { ...outcome, requestId: result.request_id };
     } catch (error) {
       if (failureBlocks()) return { action: "deny", reason: `ACS decision failure: ${errorMessage(error)}` };
@@ -253,7 +254,18 @@ export default function acsCoreExtension(pi: ExtensionAPI): void {
       toolCallPayload(event.toolName, event.input),
       ctx,
     );
-    if (outcome.action === "deny") return { block: true, reason: outcome.reason };
+    if (outcome.action === "deny") {
+      await client?.record({
+        event: "acs_tool_blocked",
+        session_id: state.sessionId,
+        call_id: event.toolCallId,
+        ...(outcome.requestId ? { request_id: outcome.requestId } : {}),
+        tool: event.toolName,
+        decision: "deny",
+        message: outcome.reason,
+      });
+      return { block: true, reason: outcome.reason };
+    }
     if (outcome.action === "allow") {
       // The response request_id links the later toolCallResult to this request.
       // It is available only for evaluated requests; otherwise omission is valid.
@@ -264,12 +276,23 @@ export default function acsCoreExtension(pi: ExtensionAPI): void {
       const tool = pi.getAllTools().find((candidate) => candidate.name === event.toolName);
       replaceObject(event.input, modifiedToolInput(event.input, outcome.modifications, tool));
       if (outcome.requestId) toolRequestIds.set(event.toolCallId, outcome.requestId);
+      await client?.record({
+        event: "acs_tool_modified",
+        session_id: state.sessionId,
+        call_id: event.toolCallId,
+        ...(outcome.requestId ? { request_id: outcome.requestId } : {}),
+        tool: event.toolName,
+      });
       return {};
     } catch (error) {
       await client?.record({
         event: "acs_invalid_modification",
         session_id: state.sessionId,
+        call_id: event.toolCallId,
+        ...(outcome.requestId ? { request_id: outcome.requestId } : {}),
         method: "steps/toolCallRequest",
+        tool: event.toolName,
+        decision: "deny",
         message: errorMessage(error),
       });
       return { block: true, reason: `ACS tool modification rejected: ${errorMessage(error)}` };
@@ -277,9 +300,18 @@ export default function acsCoreExtension(pi: ExtensionAPI): void {
   });
 
   pi.on("tool_result", async (event, ctx) => {
+    const requestId = toolRequestIds.get(event.toolCallId);
+    await client?.record({
+      event: "acs_tool_completed",
+      session_id: state.sessionId,
+      call_id: event.toolCallId,
+      ...(requestId ? { request_id: requestId } : {}),
+      tool: event.toolName,
+      exit_status: event.isError ? "failure" : "success",
+    });
     const outcome = await guardedDecision(
       "steps/toolCallResult",
-      toolResultPayload(event.toolName, toolRequestIds.get(event.toolCallId), event.content, event.isError),
+      toolResultPayload(event.toolName, requestId, event.content, event.isError),
       ctx,
     );
     toolRequestIds.delete(event.toolCallId);
