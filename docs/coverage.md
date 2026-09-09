@@ -36,7 +36,7 @@ The adapter advertises only methods it emits. It currently sends no `profiles_su
 |---|---|
 | ALLOW | Continue unchanged. If the Guardian did not list the method in `methods_evaluated`, the response is treated as ALLOW regardless of the returned decision. |
 | DENY | Block input/tool execution or replace result/response content with a short blocked record. |
-| MODIFY | Tool calls accept top-level `parameter_overrides`, validate the complete candidate against Pi's tool schema, then mutate the original event input atomically. User messages, tool results, and agent responses accept only exclusive `modified_content`. Unsupported or conflicting shapes fail closed. |
+| MODIFY | Disabled unless `enableModify` is explicitly true. When enabled, tool calls accept top-level `parameter_overrides`, validate the complete candidate against Pi's tool schema, then mutate the original event input atomically. User messages, tool results, and agent responses accept only exclusive `modified_content`. Unsupported or conflicting shapes fail closed. |
 | ASK | A human approver is routed to binary `ctx.ui.confirm()` with the Guardian's timeout. Custom `options`, `intent_extension`, non-human approvers, and unavailable UI are not supported and fail closed where they affect the decision. This alpha does not send a separate approval artifact back to the Guardian. |
 | DEFER | The action is suspended for `resolution_timeout_ms`, then follows `timeout_decision`: deny, or ask the local user. It does not yet support out-of-band resolution or additional-context exchange. |
 

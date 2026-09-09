@@ -66,10 +66,15 @@ describe("Pi extension enforcement", () => {
     vi.unstubAllGlobals();
   });
 
-  async function configure(url: string, mode: "observe" | "enforce" = "enforce"): Promise<void> {
+  async function configure(
+    url: string,
+    mode: "observe" | "enforce" = "enforce",
+    enableModify = false,
+  ): Promise<void> {
     await writeFile(configPath, JSON.stringify({
       mode,
       startupPosture: "refuse",
+      enableModify,
       guardian: { url, hmacKeyEnv: "PI_ACS_TEST_KEY", keyId: "test-key" },
       audit: { path: auditPath, includePayloads: false },
     }));
@@ -102,7 +107,7 @@ describe("Pi extension enforcement", () => {
       return {};
     });
     vi.stubGlobal("fetch", guardian.fetch);
-    await configure(guardian.url);
+    await configure(guardian.url, "enforce", true);
     const { api, handlers } = fakePi();
     const ctx = context();
     acsCoreExtension(api);
@@ -148,6 +153,33 @@ describe("Pi extension enforcement", () => {
     const audit = await readFile(auditPath, "utf8");
     expect(audit).toContain('"payload":"[omitted]"');
     expect(audit).not.toContain("first result");
+    expect(audit).toContain('"adapter_version":"0.1.0-alpha.1"');
+    expect(audit).toContain('"pi_version":"0.84.3"');
+    expect(audit).toContain('"call_id":"first"');
+  });
+
+  it("blocks MODIFY unless it is explicitly enabled", async () => {
+    const guardian = createGuardian((request) => request.method === "steps/toolCallRequest"
+      ? {
+          result: {
+            decision: "modify",
+            reasoning: "test disabled modification",
+            modifications: { parameter_overrides: { command: "rewritten" } },
+          },
+        }
+      : {});
+    vi.stubGlobal("fetch", guardian.fetch);
+    await configure(guardian.url);
+    const { api, handlers } = fakePi();
+    const ctx = context();
+    acsCoreExtension(api);
+    await oneHandler(handlers, "session_start", { type: "session_start", reason: "startup" }, ctx);
+    const input = { command: "original" };
+    const result = await oneHandler(handlers, "tool_call", {
+      type: "tool_call", toolCallId: "one", toolName: "bash", input,
+    }, ctx);
+    expect(result).toMatchObject({ block: true, reason: expect.stringContaining("disabled") });
+    expect(input.command).toBe("original");
   });
 
   it("fails closed on a malformed Guardian decision", async () => {
@@ -212,7 +244,7 @@ describe("Pi extension enforcement", () => {
       return {};
     });
     vi.stubGlobal("fetch", guardian.fetch);
-    await configure(guardian.url);
+    await configure(guardian.url, "enforce", true);
     const { api, handlers } = fakePi();
     const ctx = context();
     acsCoreExtension(api);

@@ -12,7 +12,7 @@ This is an independent early implementation. It is not an official OWASP integra
 - offline validation against ACS v0.1.0 schemas pinned at commit [`c7ad162`](https://github.com/GenAI-Security-Project/agent-control-standard/commit/c7ad162f69386daac94b89073e3b751e8cdf28b2)
 - per-session HMAC-SHA256 request and response authentication
 - Guardian ALLOW and DENY enforcement before Pi executes a tool
-- schema-validated `parameter_overrides` applied to the same mutable Pi input object that executes
+- opt-in, schema-validated `parameter_overrides` applied to the same mutable Pi input object that executes
 - human ASK through Pi's confirmation UI
 - bounded DEFER timeout handling
 - tool-result blocking or wholesale text replacement before the result returns to the model
@@ -63,6 +63,7 @@ Create `~/.pi/agent/acs-core.json`, or set `PI_ACS_CONFIG` to an explicit config
 {
   "mode": "enforce",
   "startupPosture": "refuse",
+  "enableModify": false,
   "guardian": {
     "url": "https://guardian.example/acs",
     "connectTimeoutMs": 2000,
@@ -81,7 +82,7 @@ Create `~/.pi/agent/acs-core.json`, or set `PI_ACS_CONFIG` to an explicit config
 }
 ```
 
-Enforcement mode requires an explicit startup posture and HMAC configuration. Non-loopback Guardians must use HTTPS. `observe` mode reports Guardian decisions but does not apply them.
+Enforcement mode requires an explicit startup posture and HMAC configuration. Non-loopback Guardians must use HTTPS. `observe` mode reports Guardian decisions but does not apply them. Guardian `MODIFY` decisions are applied only when `enableModify` is explicitly `true`; otherwise they fail closed.
 
 Inside Pi, `/acs-status` shows the negotiated methods and `/acs-ping` runs the unsigned liveness probe required by the standard.
 

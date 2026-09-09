@@ -1,6 +1,7 @@
 {
   "mode": "enforce",
   "startupPosture": "refuse",
+  "enableModify": true,
   "guardian": {
     "url": "http://127.0.0.1:8787/",
     "connectTimeoutMs": 2000,

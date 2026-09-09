@@ -45,6 +45,8 @@ Local JSONL audit records replace `payload` with `[omitted]` by default. `includ
 
 ## Modification safety
 
+Modification is disabled by default. Set `enableModify: true` only after the Guardian's supported modification shapes and the affected Pi tools have been tested together. A Guardian `MODIFY` decision fails closed while modification is disabled.
+
 The adapter reconstructs a complete candidate argument object, validates it against Pi's registered tool schema, and only then replaces the original input. Unsupported redactions, conflicting modification shapes, missing tool schemas, and invalid candidates block rather than partially apply.
 
 Schema validation does not prove semantic safety. A string can satisfy a tool schema and still be destructive; that is the Guardian policy's job.

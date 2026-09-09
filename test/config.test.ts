@@ -15,6 +15,7 @@ describe("configuration", () => {
     expect(config.guardian.url).toBe("http://127.0.0.1:8787/");
     expect(config.guardian.connectTimeoutMs).toBe(2_000);
     expect(config.audit.includePayloads).toBe(false);
+    expect(config.enableModify).toBe(false);
   });
 
   it.each([
@@ -24,6 +25,7 @@ describe("configuration", () => {
     [{ guardian: { url: "file:///tmp/socket" } }, "http or https"],
     [{ guardian: { url: "http://127.0.0.1", timeout: 1 } }, "unknown key"],
     [{ guardian: { url: "http://127.0.0.1", connectTimeoutMs: 0 } }, "positive integer"],
+    [{ guardian: { url: "http://127.0.0.1" }, enableModify: "yes" }, "enableModify"],
   ])("rejects invalid configuration", (value, message) => {
     expect(() => parseConfig(value, "/work")).toThrow(message);
   });

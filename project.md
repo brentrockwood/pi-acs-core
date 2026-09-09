@@ -25,7 +25,7 @@ The first release is an **experimental ACS v0.1 Pi adapter**. It is useful if it
 
 The repository now contains a working alpha against ACS revision `c7ad162f69386daac94b89073e3b751e8cdf28b2` and Pi `0.84.3` / revision `4e494929998d6bc4fccf75e0a233f727db4b70ee`.
 
-Implemented and test-backed: offline schema validation, strict configuration, signed HTTP(S) transport, handshake negotiation, allow/deny tool enforcement, validated argument overrides, human ASK, bounded DEFER timeout handling, tool-result gating, user/final-response mediation, session lifecycle events, correlation, optional payload-off audit records, and a local demo Guardian. A black-box test also launches the pinned real Pi CLI and verifies ALLOW, DENY, and MODIFY using actual Bash-tool filesystem effects.
+Implemented and test-backed: offline schema validation, strict configuration, signed HTTP(S) transport, handshake negotiation, allow/deny tool enforcement, explicitly enabled and validated argument overrides, human ASK, bounded DEFER timeout handling, tool-result gating, user/final-response mediation, session lifecycle events, correlation, optional payload-off audit records, and a local demo Guardian. A black-box test also launches the pinned real Pi CLI and verifies ALLOW, DENY, and opt-in MODIFY using actual Bash-tool filesystem effects.
 
 The alpha deliberately advertises no ACS conformance profile. It does not yet meet the whole `acs-core` profile because wrapped MCP, complete SessionContext construction, and fully interoperable ASK/DEFER resolution are still missing. The precise boundary is maintained in `docs/coverage.md`.
 

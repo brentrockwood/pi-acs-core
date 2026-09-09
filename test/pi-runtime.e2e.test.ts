@@ -106,6 +106,7 @@ async function runPi(
   guardianUrl: string,
   modelUrl: string,
   prompt: string,
+  enableModify = false,
 ): Promise<PiRun> {
   const configDirectory = join(directory, "pi-config");
   const sessionDirectory = join(directory, "sessions");
@@ -114,6 +115,7 @@ async function runPi(
   await writeFile(configPath, JSON.stringify({
     mode: "enforce",
     startupPosture: "refuse",
+    enableModify,
     guardian: {
       url: `${guardianUrl}/`,
       connectTimeoutMs: 2_000,
@@ -284,6 +286,7 @@ describe("real Pi runtime enforcement", () => {
       guardianServer!.url,
       modelServer!.url,
       `printf 'original' > ${JSON.stringify(target)} # acs-rewrite`,
+      true,
     );
     expect(await readFile(target, "utf8")).toBe("modified");
   });
