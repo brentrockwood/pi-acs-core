@@ -9,6 +9,7 @@ export interface GuardianReply {
   status?: number;
   raw?: string;
   delayMs?: number;
+  directHello?: boolean;
   result?: Omit<AcsResult, "type" | "acs_version" | "request_id">;
   error?: Omit<AcsError, "signature">;
 }
@@ -19,14 +20,14 @@ export interface TestGuardian {
   fetch: typeof globalThis.fetch;
 }
 
-function helloPayload(request: AcsRequestEnvelope): ServerHello {
+function helloPayload(request: AcsRequestEnvelope, selectedTransport: "http" | "https" = "http"): ServerHello {
   const offered = request.params.payload.methods_implemented;
   return {
     negotiated_version: ACS_VERSION,
     methods_evaluated: Array.isArray(offered)
       ? offered.filter((method): method is string => typeof method === "string")
       : [],
-    selected_transport: "http",
+    selected_transport: selectedTransport,
     signature_algorithms_supported: ["HMAC-SHA256"],
     timeout_config: { default_ms: 100 },
     on_decision_failure: "deny",
@@ -73,11 +74,13 @@ export function createGuardian(
       if (request.method !== "system/ping") error.signature = signEnvelope(response, key, TEST_KEY_ID);
       return Response.json(response, { status: selected.status ?? 200 });
     }
-    if (request.method === "handshake/hello") {
-      const response: AcsResponseEnvelope = { jsonrpc: "2.0", id: request.id, result: helloPayload(request) };
+    if (request.method === "handshake/hello" && selected.directHello === true) {
+      const response: AcsResponseEnvelope = { jsonrpc: "2.0", id: request.id, result: helloPayload(request, "https") };
       return Response.json(response, { status: selected.status ?? 200 });
     }
-    const decision = selected.result ?? { decision: "allow" as const };
+    const decision = request.method === "handshake/hello"
+      ? { decision: "allow" as const, payload: helloPayload(request) }
+      : selected.result ?? { decision: "allow" as const };
     const result = {
       type: "final",
       acs_version: ACS_VERSION,

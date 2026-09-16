@@ -26,17 +26,27 @@ describe("Guardian client", () => {
   }
 
   it("accepts a direct ServerHello, signs traffic, correlates ids, and returns a deny", async () => {
-    guardian = createGuardian((request) => request.method === "steps/toolCallRequest"
-      ? { result: { decision: "deny", reasoning: "test deny" } }
-      : {});
+    guardian = createGuardian((request) => {
+      if (request.method === "handshake/hello") return { directHello: true };
+      return request.method === "steps/toolCallRequest"
+        ? { result: { decision: "deny", reasoning: "test deny" } }
+        : {};
+    });
     vi.stubGlobal("fetch", guardian.fetch);
     const state = newSessionState();
-    const acs = client(guardian.url);
+    const acs = client("https://guardian.example/");
     state.handshake = await acs.handshake(state);
     const result = await acs.request(state, "steps/toolCallRequest", toolCallPayload("bash", { command: "pwd" }));
     expect(result).toMatchObject({ decision: "deny", reasoning: "test deny" });
     expect(guardian.requests).toHaveLength(2);
     expect(guardian.requests.every((request) => request.params.signature !== undefined)).toBe(true);
+  });
+
+  it("rejects an unsigned direct ServerHello over HTTP", async () => {
+    guardian = createGuardian((request) => request.method === "handshake/hello" ? { directHello: true } : {});
+    vi.stubGlobal("fetch", guardian.fetch);
+    await expect(client(guardian.url).handshake(newSessionState()))
+      .rejects.toMatchObject({ kind: "signature" });
   });
 
   it("classifies malformed JSON and timeouts", async () => {
@@ -88,8 +98,11 @@ describe("Guardian client", () => {
     const originalFetch = guardian.fetch;
     vi.stubGlobal("fetch", async (input: RequestInfo | URL, init?: RequestInit) => {
       const response = await originalFetch(input, init);
+      const request = JSON.parse(String(init?.body)) as { method?: string };
       const value = await response.json() as any;
-      if (value.result?.signature) value.result.signature.key_id = "different-key";
+      if (request.method === "steps/toolCallRequest" && value.result?.signature) {
+        value.result.signature.key_id = "different-key";
+      }
       return Response.json(value);
     });
     const state = newSessionState();

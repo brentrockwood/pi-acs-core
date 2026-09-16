@@ -13,7 +13,7 @@ The adapter advertises only methods it emits. It currently sends no `profiles_su
 
 | ACS method | Pi boundary | Status | Exact limitation |
 |---|---|---|---|
-| `handshake/hello` | `session_start` | Implemented | Pi fires this after its session object exists and accepts the schema's direct `ServerHello` response shape. A failed-closed handshake blocks later input and tools the extension can see, but cannot make the Pi session object cease to exist. |
+| `handshake/hello` | `session_start` | Implemented | Pi fires this after its session object exists. It accepts the schema's unsigned direct `ServerHello` only over authenticated HTTPS; loopback HTTP uses the signed legacy `AcsResult.payload` shape so negotiation remains authenticated. A failed-closed handshake blocks later input and tools the extension can see, but cannot make the Pi session object cease to exist. |
 | `steps/sessionStart` | `session_start` | Partial enforcement | Emitted after a successful handshake. DENY prevents later mediated actions. MODIFY has no meaningful Pi target and fails closed. |
 | `steps/sessionEnd` | `session_shutdown` | Observe | Best effort. Pi shutdown is not held indefinitely for an unavailable Guardian. Reload/new/resume/fork map to `abandoned`; quit maps to `completed`. |
 | `steps/userMessage` | `input` | Enforce | Covers input Pi routes through this event. It does not cover direct `!`/`!!` user shell execution. Wholesale text replacement is supported; structured redactions are not. |
