@@ -25,7 +25,7 @@ describe("Guardian client", () => {
     }, "/work"));
   }
 
-  it("handshakes, signs traffic, correlates ids, and returns a deny", async () => {
+  it("accepts a direct ServerHello, signs traffic, correlates ids, and returns a deny", async () => {
     guardian = createGuardian((request) => request.method === "steps/toolCallRequest"
       ? { result: { decision: "deny", reasoning: "test deny" } }
       : {});
@@ -71,6 +71,16 @@ describe("Guardian client", () => {
     const result = await acs.request(state, "system/ping", { echo: "hello" });
     expect(result.decision).toBe("allow");
     expect(guardian.requests.at(-1)?.params.signature).toBeUndefined();
+
+    const errorGuardian = createGuardian((request) => request.method === "system/ping"
+      ? { error: { code: -32001, message: "Ping unavailable" } }
+      : {});
+    vi.stubGlobal("fetch", errorGuardian.fetch);
+    const errorState = newSessionState();
+    const errorClient = client(errorGuardian.url);
+    errorState.handshake = await errorClient.handshake(errorState);
+    await expect(errorClient.request(errorState, "system/ping", {}))
+      .rejects.toMatchObject({ kind: "guardian_error", message: "Ping unavailable" });
   });
 
   it("rejects a response signed under an unexpected key id", async () => {
@@ -84,7 +94,9 @@ describe("Guardian client", () => {
     });
     const state = newSessionState();
     const acs = client(guardian.url);
-    await expect(acs.handshake(state)).rejects.toMatchObject({ kind: "signature" });
+    state.handshake = await acs.handshake(state);
+    await expect(acs.request(state, "steps/toolCallRequest", toolCallPayload("bash", { command: "pwd" })))
+      .rejects.toMatchObject({ kind: "signature" });
   });
 
   it("verifies signed JSON-RPC error envelopes before surfacing the error", async () => {

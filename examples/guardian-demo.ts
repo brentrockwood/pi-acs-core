@@ -2,7 +2,7 @@ import { createServer, type IncomingMessage, type ServerResponse } from "node:ht
 import { deriveSessionKey, signEnvelope, verifyEnvelope } from "../src/crypto.js";
 import { METHODS_IMPLEMENTED } from "../src/mapper.js";
 import { validateRequest, validateResponse } from "../src/schema.js";
-import type { AcsRequestEnvelope, AcsResponseEnvelope, AcsResult, JsonObject } from "../src/types.js";
+import type { AcsRequestEnvelope, AcsResponseEnvelope, AcsResult, JsonObject, ServerHello } from "../src/types.js";
 import { ACS_VERSION } from "../src/types.js";
 
 const host = "127.0.0.1";
@@ -33,26 +33,24 @@ function toolCommand(payload: JsonObject): string | undefined {
   return typeof value === "string" ? value : undefined;
 }
 
+function serverHelloFor(request: AcsRequestEnvelope): ServerHello {
+  const offered = request.params.payload.methods_implemented;
+  const methods = Array.isArray(offered)
+    ? offered.filter((method): method is string => typeof method === "string" && METHODS_IMPLEMENTED.includes(method as never))
+    : [];
+  return {
+    negotiated_version: ACS_VERSION,
+    methods_evaluated: methods,
+    selected_transport: "http",
+    signature_algorithms_supported: ["HMAC-SHA256"],
+    timeout_config: { default_ms: 2_000 },
+    on_decision_failure: "deny",
+    policy_requires_provenance: false,
+    profiles_accepted: [],
+  };
+}
+
 function decisionFor(request: AcsRequestEnvelope): Omit<AcsResult, "type" | "acs_version" | "request_id"> {
-  if (request.method === "handshake/hello") {
-    const offered = request.params.payload.methods_implemented;
-    const methods = Array.isArray(offered)
-      ? offered.filter((method): method is string => typeof method === "string" && METHODS_IMPLEMENTED.includes(method as never))
-      : [];
-    return {
-      decision: "allow",
-      payload: {
-        negotiated_version: ACS_VERSION,
-        methods_evaluated: methods,
-        selected_transport: "http",
-        signature_algorithms_supported: ["HMAC-SHA256"],
-        timeout_config: { default_ms: 2_000 },
-        on_decision_failure: "deny",
-        policy_requires_provenance: false,
-        profiles_accepted: [],
-      },
-    };
-  }
   if (request.method === "system/ping") {
     return {
       decision: "allow",
@@ -115,14 +113,19 @@ const server = createServer(async (incoming, outgoing) => {
       await new Promise<void>((resolve) => setTimeout(resolve, 5_000));
     }
 
-    const result = {
-      type: "final",
-      acs_version: ACS_VERSION,
-      request_id: request.params.request_id,
-      ...decisionFor(request),
-    } as AcsResult;
-    const response: AcsResponseEnvelope = { jsonrpc: "2.0", id: request.id, result };
-    if (request.method !== "system/ping") result.signature = signEnvelope(response, sessionKey, keyId);
+    let response: AcsResponseEnvelope;
+    if (request.method === "handshake/hello") {
+      response = { jsonrpc: "2.0", id: request.id, result: serverHelloFor(request) };
+    } else {
+      const result = {
+        type: "final",
+        acs_version: ACS_VERSION,
+        request_id: request.params.request_id,
+        ...decisionFor(request),
+      } as AcsResult;
+      response = { jsonrpc: "2.0", id: request.id, result };
+      if (request.method !== "system/ping") result.signature = signEnvelope(response, sessionKey, keyId);
+    }
     validateResponse(response);
     sendJson(outgoing, 200, response);
   } catch (error) {

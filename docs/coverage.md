@@ -13,7 +13,7 @@ The adapter advertises only methods it emits. It currently sends no `profiles_su
 
 | ACS method | Pi boundary | Status | Exact limitation |
 |---|---|---|---|
-| `handshake/hello` | `session_start` | Implemented | Pi fires this after its session object exists. A failed-closed handshake blocks later input and tools the extension can see, but cannot make the Pi session object cease to exist. |
+| `handshake/hello` | `session_start` | Implemented | Pi fires this after its session object exists and accepts the schema's direct `ServerHello` response shape. A failed-closed handshake blocks later input and tools the extension can see, but cannot make the Pi session object cease to exist. |
 | `steps/sessionStart` | `session_start` | Partial enforcement | Emitted after a successful handshake. DENY prevents later mediated actions. MODIFY has no meaningful Pi target and fails closed. |
 | `steps/sessionEnd` | `session_shutdown` | Observe | Best effort. Pi shutdown is not held indefinitely for an unavailable Guardian. Reload/new/resume/fork map to `abandoned`; quit maps to `completed`. |
 | `steps/userMessage` | `input` | Enforce | Covers input Pi routes through this event. It does not cover direct `!`/`!!` user shell execution. Wholesale text replacement is supported; structured redactions are not. |
@@ -43,7 +43,7 @@ The adapter advertises only methods it emits. It currently sends no `profiles_su
 
 ## Integrity and chain state
 
-Requests and decision responses, except `system/ping`, use HMAC-SHA256 when configured. A signed JSON-RPC error envelope is also verified before the client surfaces its error; a missing or invalid error signature fails as a signature error. Current PR #22 reference adapters sign errors this way, although the current schema does not define an explicit `error.signature` property. Requiring it when the session key is available is deliberate conservative interoperability behavior, not a conformance claim. Enforcement mode refuses unsigned configuration. The client verifies JSON-RPC ID, ACS `request_id` where present, signature key ID, response/error signature, selected transport, negotiated version, accepted profiles, and evaluated-method subset.
+Requests and decision responses, except `system/ping`, use HMAC-SHA256 when configured. A signed JSON-RPC error envelope is also verified before the client surfaces its error; a missing or invalid error signature fails as a signature error. `system/ping` errors remain exempt because the pinned schema says the liveness method must not require a signature. Current PR #22 reference adapters sign ordinary errors this way, although the current schema does not define an explicit `error.signature` property. Requiring it for non-ping methods when the session key is available is deliberate conservative interoperability behavior, not a conformance claim. Enforcement mode refuses unsigned configuration. The client verifies JSON-RPC ID, ACS `request_id` where present, signature key ID, applicable response/error signatures, selected transport, negotiated version, accepted profiles, and evaluated-method subset.
 
 When a Guardian returns `chain_hash`, the adapter propagates it as the next request's `metadata.session_state.chain_hash` and includes the last value at session end. It does not construct or persist the Guardian's append-only ContextEntry chain and therefore does not claim full SessionContext conformance or ACS-Audit.
 
