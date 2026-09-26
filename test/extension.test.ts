@@ -158,6 +158,40 @@ describe("Pi extension enforcement", () => {
     expect(audit).toContain('"call_id":"first"');
   });
 
+  it("does not send unevaluated methods or create dangling result correlation", async () => {
+    const guardian = createGuardian((request) => {
+      if (request.method === "handshake/hello") {
+        return { methodsEvaluated: ["steps/sessionStart", "steps/toolCallResult"] };
+      }
+      if (request.method === "steps/toolCallRequest") {
+        return { error: { code: -32601, message: "method not evaluated" } };
+      }
+      return {};
+    });
+    vi.stubGlobal("fetch", guardian.fetch);
+    await configure(guardian.url);
+    const { api, handlers } = fakePi();
+    const ctx = context();
+    acsCoreExtension(api);
+    await oneHandler(handlers, "session_start", { type: "session_start", reason: "startup" }, ctx);
+
+    await expect(oneHandler(handlers, "tool_call", {
+      type: "tool_call", toolCallId: "unevaluated", toolName: "bash", input: { command: "allowed" },
+    }, ctx)).resolves.toEqual({});
+    await oneHandler(handlers, "tool_result", {
+      type: "tool_result", toolCallId: "unevaluated", toolName: "bash", input: { command: "allowed" },
+      content: [{ type: "text", text: "result" }], isError: false,
+    }, ctx);
+
+    expect(guardian.requests.some((request) => request.method === "steps/toolCallRequest")).toBe(false);
+    const result = guardian.requests.find((request) => request.method === "steps/toolCallResult");
+    expect(result).toBeDefined();
+    expect(result?.params.payload.request_id_ref).toBeUndefined();
+    const audit = await readFile(auditPath, "utf8");
+    expect(audit).toContain('"event":"acs_unevaluated_allow"');
+    expect(audit).toContain('"method":"steps/toolCallRequest"');
+  });
+
   it("blocks MODIFY unless it is explicitly enabled", async () => {
     const guardian = createGuardian((request) => request.method === "steps/toolCallRequest"
       ? {

@@ -4,7 +4,7 @@ Target contracts:
 
 - ACS schema version: `0.1.0`
 - ACS source revision: `b865e510e17165258fb65810938086217b28c7ae` (open upstream PR #21 head; proposed repository release `0.1.3`)
-- Reference-adapter revision: `7174a033c15f69ee58caaa5eb0a19279592171c7` (open upstream PR #22 head)
+- Reference-adapter revision: `4bdf367916a94ade4577bc9b3a38eae25072faed` (open upstream PR #22 head)
 - Pi package and extension API: `@earendil-works/pi-coding-agent` `0.84.3`, source revision `4e494929998d6bc4fccf75e0a233f727db4b70ee`
 
 The adapter advertises only methods it emits. It currently sends no `profiles_supported` values. In particular, it does not claim `acs-core`. The recorded behavior below is not a conformance assertion.
@@ -13,7 +13,7 @@ The adapter advertises only methods it emits. It currently sends no `profiles_su
 
 | ACS method | Pi boundary | Status | Exact limitation |
 |---|---|---|---|
-| `handshake/hello` | `session_start` | Implemented | Pi fires this after its session object exists. It accepts the schema's unsigned direct `ServerHello` only over authenticated HTTPS; loopback HTTP uses the signed legacy `AcsResult.payload` shape so negotiation remains authenticated. A failed-closed handshake blocks later input and tools the extension can see, but cannot make the Pi session object cease to exist. |
+| `handshake/hello` | `session_start` | Implemented | Pi fires this after its session object exists. It accepts the schema's direct `ServerHello` result when its embedded HMAC verifies, including over loopback HTTP; without an HMAC key, the direct result is accepted only over authenticated HTTPS. The legacy `AcsResult.payload` wrapper is rejected. A failed-closed handshake blocks later input and tools the extension can see, but cannot make the Pi session object cease to exist. |
 | `steps/sessionStart` | `session_start` | Partial enforcement | Emitted after a successful handshake. DENY prevents later mediated actions. MODIFY has no meaningful Pi target and fails closed. |
 | `steps/sessionEnd` | `session_shutdown` | Observe | Best effort. Pi shutdown is not held indefinitely for an unavailable Guardian. Reload/new/resume/fork map to `abandoned`; quit maps to `completed`. |
 | `steps/userMessage` | `input` | Enforce | Covers input Pi routes through this event. It does not cover direct `!`/`!!` user shell execution. Wholesale text replacement is supported; structured redactions are not. |
@@ -35,7 +35,7 @@ The adapter advertises only methods it emits. It currently sends no `profiles_su
 
 | Decision | Current behavior |
 |---|---|
-| ALLOW | Continue unchanged. If the Guardian did not list the method in `methods_evaluated`, the response is treated as ALLOW regardless of the returned decision. |
+| ALLOW | Continue unchanged. If the Guardian did not list the method in `methods_evaluated`, the request is not sent, the omission is audited as `acs_unevaluated_allow`, and the local action continues. An evaluated `toolCallResult` never cites a skipped `toolCallRequest`. |
 | DENY | Block input/tool execution or replace result/response content with a short blocked record. |
 | MODIFY | Disabled unless `enableModify` is explicitly true. When enabled, tool calls accept top-level `parameter_overrides`, validate the complete candidate against Pi's tool schema, then mutate the original event input atomically. User messages, tool results, and agent responses accept only exclusive `modified_content`. Unsupported or conflicting shapes fail closed. |
 | ASK | A human approver is routed to binary `ctx.ui.confirm()` with the Guardian's timeout. Custom `options`, `intent_extension`, non-human approvers, and unavailable UI are not supported and fail closed where they affect the decision. This alpha does not send a separate approval artifact back to the Guardian. |
@@ -43,7 +43,7 @@ The adapter advertises only methods it emits. It currently sends no `profiles_su
 
 ## Integrity and chain state
 
-Requests and decision responses, except `system/ping`, use HMAC-SHA256 when configured. A signed JSON-RPC error envelope is also verified before the client surfaces its error; a missing or invalid error signature fails as a signature error. `system/ping` errors remain exempt because the pinned schema says the liveness method must not require a signature. Current PR #22 reference adapters sign ordinary errors this way, although the current schema does not define an explicit `error.signature` property. Requiring it for non-ping methods when the session key is available is deliberate conservative interoperability behavior, not a conformance claim. Enforcement mode refuses unsigned configuration. The client verifies JSON-RPC ID, ACS `request_id` where present, signature key ID, applicable response/error signatures, selected transport, negotiated version, accepted profiles, and evaluated-method subset.
+Requests and decision responses, except `system/ping`, use HMAC-SHA256 when configured. This includes the direct `ServerHello` result added by current PR #22 reference adapters. A signed JSON-RPC error envelope is also verified before the client surfaces its error; a missing or invalid error signature fails as a signature error. `system/ping` errors remain exempt because the pinned schema says the liveness method must not require a signature. Current PR #22 reference adapters sign ordinary errors this way, although the current schema does not define an explicit `error.signature` property. Requiring it for non-ping methods when the session key is available is deliberate conservative interoperability behavior, not a conformance claim. Enforcement mode refuses unsigned configuration. The client verifies JSON-RPC ID, ACS `request_id` where present, signature key ID, applicable response/error signatures, selected transport, negotiated version, accepted profiles, and evaluated-method subset.
 
 When a Guardian returns `chain_hash`, the adapter propagates it as the next request's `metadata.session_state.chain_hash` and includes the last value at session end. It does not construct or persist the Guardian's append-only ContextEntry chain and therefore does not claim full SessionContext conformance or ACS-Audit.
 

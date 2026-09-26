@@ -2,6 +2,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { AcsClient } from "../src/client.js";
 import { parseConfig } from "../src/config.js";
 import { newSessionState, toolCallPayload } from "../src/mapper.js";
+import type { ServerHello } from "../src/types.js";
 import { createGuardian, TEST_KEY, type TestGuardian } from "./guardian-helper.js";
 
 describe("Guardian client", () => {
@@ -25,7 +26,7 @@ describe("Guardian client", () => {
     }, "/work"));
   }
 
-  it("accepts a direct ServerHello, signs traffic, correlates ids, and returns a deny", async () => {
+  it("accepts a signed direct ServerHello over HTTP, correlates ids, and returns a deny", async () => {
     guardian = createGuardian((request) => {
       if (request.method === "handshake/hello") return { directHello: true };
       return request.method === "steps/toolCallRequest"
@@ -34,7 +35,7 @@ describe("Guardian client", () => {
     });
     vi.stubGlobal("fetch", guardian.fetch);
     const state = newSessionState();
-    const acs = client("https://guardian.example/");
+    const acs = client(guardian.url);
     state.handshake = await acs.handshake(state);
     const result = await acs.request(state, "steps/toolCallRequest", toolCallPayload("bash", { command: "pwd" }));
     expect(result).toMatchObject({ decision: "deny", reasoning: "test deny" });
@@ -43,10 +44,30 @@ describe("Guardian client", () => {
   });
 
   it("rejects an unsigned direct ServerHello over HTTP", async () => {
-    guardian = createGuardian((request) => request.method === "handshake/hello" ? { directHello: true } : {});
+    guardian = createGuardian((request) => request.method === "handshake/hello"
+      ? { directHello: true, unsignedHello: true }
+      : {});
     vi.stubGlobal("fetch", guardian.fetch);
     await expect(client(guardian.url).handshake(newSessionState()))
       .rejects.toMatchObject({ kind: "signature" });
+  });
+
+  it("rejects tampered signed direct and legacy wrapped ServerHello responses", async () => {
+    guardian = createGuardian();
+    const signedFetch = guardian.fetch;
+    vi.stubGlobal("fetch", async (input: RequestInfo | URL, init?: RequestInit) => {
+      const response = await signedFetch(input, init);
+      const value = await response.json() as { result?: ServerHello };
+      if (value.result?.negotiated_version) value.result.on_decision_failure = "proceed";
+      return Response.json(value);
+    });
+    await expect(client(guardian.url).handshake(newSessionState()))
+      .rejects.toMatchObject({ kind: "signature" });
+
+    guardian = createGuardian((request) => request.method === "handshake/hello" ? { legacyHello: true } : {});
+    vi.stubGlobal("fetch", guardian.fetch);
+    await expect(client(guardian.url).handshake(newSessionState()))
+      .rejects.toMatchObject({ kind: "invalid_schema" });
   });
 
   it("classifies malformed JSON and timeouts", async () => {

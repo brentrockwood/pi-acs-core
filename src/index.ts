@@ -143,17 +143,15 @@ export default function acsCoreExtension(pi: ExtensionAPI): void {
 
   async function request(method: string, payload: JsonObject): Promise<AcsResult | undefined> {
     if (!client || !state.handshake) return undefined;
-    const result = await client.request(state, method, payload);
     if (!client.isEvaluated(state, method)) {
       await client.record({
         event: "acs_unevaluated_allow",
         session_id: state.sessionId,
-        request_id: result.request_id,
         method,
-        decision: result.decision,
       });
-      return { ...result, decision: "allow" };
+      return undefined;
     }
+    const result = await client.request(state, method, payload);
     if (!enforcementEnabled()) {
       await client.record({
         event: "acs_observe_only",
@@ -343,6 +341,14 @@ export default function acsCoreExtension(pi: ExtensionAPI): void {
 
   pi.on("session_shutdown", async (event) => {
     if (!client || !state.handshake) return;
+    if (!client.isEvaluated(state, "steps/sessionEnd")) {
+      await client.record({
+        event: "acs_unevaluated_allow",
+        session_id: state.sessionId,
+        method: "steps/sessionEnd",
+      });
+      return;
+    }
     try {
       await client.request(state, "steps/sessionEnd", {
         reason: event.reason === "quit" ? "completed" : "abandoned",

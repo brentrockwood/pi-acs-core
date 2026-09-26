@@ -113,17 +113,21 @@ const server = createServer(async (incoming, outgoing) => {
       await new Promise<void>((resolve) => setTimeout(resolve, 5_000));
     }
 
-    const decision = request.method === "handshake/hello"
-      ? { decision: "allow" as const, payload: serverHelloFor(request) as unknown as JsonObject }
-      : decisionFor(request);
-    const result = {
-      type: "final",
-      acs_version: ACS_VERSION,
-      request_id: request.params.request_id,
-      ...decision,
-    } as AcsResult;
-    const response: AcsResponseEnvelope = { jsonrpc: "2.0", id: request.id, result };
-    if (request.method !== "system/ping") result.signature = signEnvelope(response, sessionKey, keyId);
+    let response: AcsResponseEnvelope;
+    if (request.method === "handshake/hello") {
+      const result = serverHelloFor(request);
+      response = { jsonrpc: "2.0", id: request.id, result };
+      result.signature = signEnvelope(response, sessionKey, keyId);
+    } else {
+      const result = {
+        type: "final",
+        acs_version: ACS_VERSION,
+        request_id: request.params.request_id,
+        ...decisionFor(request),
+      } as AcsResult;
+      response = { jsonrpc: "2.0", id: request.id, result };
+      if (request.method !== "system/ping") result.signature = signEnvelope(response, sessionKey, keyId);
+    }
     validateResponse(response);
     sendJson(outgoing, 200, response);
   } catch (error) {
