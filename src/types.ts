@@ -64,12 +64,13 @@ export interface AcsError {
   code: number;
   message: string;
   data?: unknown;
+  signature?: AcsSignature;
 }
 
 export interface AcsResponseEnvelope {
   jsonrpc: "2.0";
   id: string | number | null;
-  result?: AcsResult;
+  result?: AcsResult | ServerHello;
   error?: AcsError;
 }
 
@@ -77,6 +78,7 @@ export interface ServerHello {
   negotiated_version: string;
   methods_evaluated: string[];
   selected_transport: "http" | "https" | "stdio";
+  signature?: AcsSignature;
   signature_algorithms_supported?: string[];
   timeout_config: {
     default_ms: number;

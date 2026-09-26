@@ -3,16 +3,17 @@
 Target contracts:
 
 - ACS schema version: `0.1.0`
-- ACS source revision: `c7ad162f69386daac94b89073e3b751e8cdf28b2`
+- ACS source revision: `b865e510e17165258fb65810938086217b28c7ae` (open upstream PR #21 head; proposed repository release `0.1.3`)
+- Reference-adapter revision: `4bdf367916a94ade4577bc9b3a38eae25072faed` (open upstream PR #22 head)
 - Pi package and extension API: `@earendil-works/pi-coding-agent` `0.84.3`, source revision `4e494929998d6bc4fccf75e0a233f727db4b70ee`
 
-The adapter advertises only methods it emits. It currently sends no `profiles_supported` values. In particular, it does not claim `acs-core`: ACS-Core also requires wrapped MCP, a complete SessionContext chain, and fully interoperable handling of every disposition. Shipping useful enforcement without that label is more accurate than treating the six minimum hooks as the entire profile.
+The adapter advertises only methods it emits. It currently sends no `profiles_supported` values. In particular, it does not claim `acs-core`. The recorded behavior below is not a conformance assertion.
 
 ## Instrument and system methods
 
 | ACS method | Pi boundary | Status | Exact limitation |
 |---|---|---|---|
-| `handshake/hello` | `session_start` | Implemented | Pi fires this after its session object exists. A failed-closed handshake blocks later input and tools the extension can see, but cannot make the Pi session object cease to exist. |
+| `handshake/hello` | `session_start` | Implemented | Pi fires this after its session object exists. It accepts the schema's direct `ServerHello` result when its embedded HMAC verifies, including over loopback HTTP; without an HMAC key, the direct result is accepted only over authenticated HTTPS. The legacy `AcsResult.payload` wrapper is rejected. A failed-closed handshake blocks later input and tools the extension can see, but cannot make the Pi session object cease to exist. |
 | `steps/sessionStart` | `session_start` | Partial enforcement | Emitted after a successful handshake. DENY prevents later mediated actions. MODIFY has no meaningful Pi target and fails closed. |
 | `steps/sessionEnd` | `session_shutdown` | Observe | Best effort. Pi shutdown is not held indefinitely for an unavailable Guardian. Reload/new/resume/fork map to `abandoned`; quit maps to `completed`. |
 | `steps/userMessage` | `input` | Enforce | Covers input Pi routes through this event. It does not cover direct `!`/`!!` user shell execution. Wholesale text replacement is supported; structured redactions are not. |
@@ -24,7 +25,7 @@ The adapter advertises only methods it emits. It currently sends no `profiles_su
 | `steps/preCompact`, `steps/postCompact` | `session_before_compact`, `session_compact` | Unsupported in this alpha | Pi exposes the events. The current adapter does not manufacture ACS provenance, entry hashes, or post-compaction chain facts it cannot derive faithfully. |
 | knowledge retrieval hooks | no single guaranteed boundary | Unsupported | Pi extensions and tools can implement retrieval in different ways. |
 | memory hooks | no canonical Pi memory boundary | Unsupported | No synthetic observation is emitted. |
-| skill lifecycle hooks | resource discovery/loading does not expose the required lifecycle contract | Unsupported | No synthetic observation is emitted. |
+| skill lifecycle hooks | resource discovery, prompt expansion, and ordinary `read` calls | Unsupported | Pi can discover skill metadata and inject a `/skill:name` prompt, while model-driven loading appears as an ordinary file read. The extension API exposes no registration/load/unload event that binds a stable skill id to a digest of the complete artifact. No synthetic lifecycle observation is emitted. |
 | subagent hooks | no built-in Pi subagent lifecycle | Unsupported | External extensions may create subprocess agents outside this adapter. |
 | `system/ping` | `/acs-ping` | Implemented | Sent without a signature and never treated as an enforcement decision, as required by the pinned schema. |
 | `protocols/MCP/*` | MCP tools eventually appear as Pi tool calls | Unsupported | The adapter sees the normalized Pi tool invocation, not the MCP protocol exchange, so it does not claim wrapped-MCP coverage. |
@@ -34,7 +35,7 @@ The adapter advertises only methods it emits. It currently sends no `profiles_su
 
 | Decision | Current behavior |
 |---|---|
-| ALLOW | Continue unchanged. If the Guardian did not list the method in `methods_evaluated`, the response is treated as ALLOW regardless of the returned decision. |
+| ALLOW | Continue unchanged. If the Guardian did not list the method in `methods_evaluated`, the request is not sent, the omission is audited as `acs_unevaluated_allow`, and the local action continues. An evaluated `toolCallResult` never cites a skipped `toolCallRequest`. |
 | DENY | Block input/tool execution or replace result/response content with a short blocked record. |
 | MODIFY | Disabled unless `enableModify` is explicitly true. When enabled, tool calls accept top-level `parameter_overrides`, validate the complete candidate against Pi's tool schema, then mutate the original event input atomically. User messages, tool results, and agent responses accept only exclusive `modified_content`. Unsupported or conflicting shapes fail closed. |
 | ASK | A human approver is routed to binary `ctx.ui.confirm()` with the Guardian's timeout. Custom `options`, `intent_extension`, non-human approvers, and unavailable UI are not supported and fail closed where they affect the decision. This alpha does not send a separate approval artifact back to the Guardian. |
@@ -42,9 +43,20 @@ The adapter advertises only methods it emits. It currently sends no `profiles_su
 
 ## Integrity and chain state
 
-Requests and responses, except `system/ping`, use HMAC-SHA256 when configured. Enforcement mode refuses unsigned configuration. The client verifies JSON-RPC ID, ACS `request_id`, signature key ID, response signature, selected transport, negotiated version, accepted profiles, and evaluated-method subset.
+Requests and decision responses, except `system/ping`, use HMAC-SHA256 when configured. This includes the direct `ServerHello` result added by current PR #22 reference adapters. A signed JSON-RPC error envelope is also verified before the client surfaces its error; a missing or invalid error signature fails as a signature error. `system/ping` errors remain exempt because the pinned schema says the liveness method must not require a signature. Current PR #22 reference adapters sign ordinary errors this way, although the current schema does not define an explicit `error.signature` property. Requiring it for non-ping methods when the session key is available is deliberate conservative interoperability behavior, not a conformance claim. Enforcement mode refuses unsigned configuration. The client verifies JSON-RPC ID, ACS `request_id` where present, signature key ID, applicable response/error signatures, selected transport, negotiated version, accepted profiles, and evaluated-method subset.
 
 When a Guardian returns `chain_hash`, the adapter propagates it as the next request's `metadata.session_state.chain_hash` and includes the last value at session end. It does not construct or persist the Guardian's append-only ContextEntry chain and therefore does not claim full SessionContext conformance or ACS-Audit.
+
+## Proposed ACS-Core 0.1.3 changes in upstream PR #21
+
+PR #21 is open and awaiting re-review as of 2026-09-15. This adapter does not claim that its proposed rules are current ACS requirements or that it satisfies them.
+
+- Pi's partial, schema-validated `MODIFY` handling remains opt-in. Under the proposal, `MODIFY` is SHOULD-support; an unapplicable `MODIFY` must normally become `DENY` with audit, with a special `postCompact` exception. This adapter already fails closed on unsupported shapes but does not claim the full proposed contract.
+- `system/ping` is already implemented and sent by the observed agent. The proposal makes it SHOULD-support and requires a deployment-named alternative when omitted; this does not expand the adapter's claim.
+- Raw `protocols/MCP/*` remains absent. The proposal requires wrapped coverage whenever a session involves MCP, except that MCP `tools/call` may use generic tool hooks. Pi's normalized tool calls do not expose resource reads, prompts, notifications, or negotiation, so only a deployment that genuinely never uses MCP could omit the namespace.
+- Pi exposes no built-in subagent abstraction to this adapter, and it emits neither `steps/subagentStart` nor `steps/subagentStop`. The proposal requires `subagentStart` for subagent-capable clients and makes `subagentStop` SHOULD-emit. The adapter does not extend the no-subagent exception to third-party extensions that create child agents outside its view.
+- Skill lifecycle hooks are SHOULD-emit when the harness can observe the lifecycle. Pi's available events do not establish the stable id, complete-artifact digest, and activation boundary needed for honest `skillRegister`/`skillLoad`/`skillUnload` messages.
+- Complete SessionContext persistence, full lifecycle coverage, and the exact end-to-end behavior required for a profile remain unproven.
 
 ## Parallel calls
 
@@ -55,7 +67,7 @@ Pi preflights sibling tool calls through `tool_call` and may execute allowed sib
 Automated tests currently establish:
 
 - generated requests and received responses are rejected when the vendored schema says they are malformed;
-- configured HMAC signatures and both correlation IDs are checked;
+- configured HMAC signatures, including signed JSON-RPC error envelopes, and applicable correlation IDs are checked;
 - an explicit DENY returns Pi's pre-execution block result;
 - a valid override changes the original input object and an invalid override does not partially mutate it;
 - the pinned real Pi CLI loads the extension and routes model-originated Bash calls through it: ALLOW produces the expected filesystem side effect, DENY prevents it, and MODIFY causes the real tool to receive the replacement command;

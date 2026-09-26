@@ -2,6 +2,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { AcsClient } from "../src/client.js";
 import { parseConfig } from "../src/config.js";
 import { newSessionState, toolCallPayload } from "../src/mapper.js";
+import type { ServerHello } from "../src/types.js";
 import { createGuardian, TEST_KEY, type TestGuardian } from "./guardian-helper.js";
 
 describe("Guardian client", () => {
@@ -25,10 +26,13 @@ describe("Guardian client", () => {
     }, "/work"));
   }
 
-  it("handshakes, signs traffic, correlates ids, and returns a deny", async () => {
-    guardian = createGuardian((request) => request.method === "steps/toolCallRequest"
-      ? { result: { decision: "deny", reasoning: "test deny" } }
-      : {});
+  it("accepts a signed direct ServerHello over HTTP, correlates ids, and returns a deny", async () => {
+    guardian = createGuardian((request) => {
+      if (request.method === "handshake/hello") return { directHello: true };
+      return request.method === "steps/toolCallRequest"
+        ? { result: { decision: "deny", reasoning: "test deny" } }
+        : {};
+    });
     vi.stubGlobal("fetch", guardian.fetch);
     const state = newSessionState();
     const acs = client(guardian.url);
@@ -37,6 +41,33 @@ describe("Guardian client", () => {
     expect(result).toMatchObject({ decision: "deny", reasoning: "test deny" });
     expect(guardian.requests).toHaveLength(2);
     expect(guardian.requests.every((request) => request.params.signature !== undefined)).toBe(true);
+  });
+
+  it("rejects an unsigned direct ServerHello over HTTP", async () => {
+    guardian = createGuardian((request) => request.method === "handshake/hello"
+      ? { directHello: true, unsignedHello: true }
+      : {});
+    vi.stubGlobal("fetch", guardian.fetch);
+    await expect(client(guardian.url).handshake(newSessionState()))
+      .rejects.toMatchObject({ kind: "signature" });
+  });
+
+  it("rejects tampered signed direct and legacy wrapped ServerHello responses", async () => {
+    guardian = createGuardian();
+    const signedFetch = guardian.fetch;
+    vi.stubGlobal("fetch", async (input: RequestInfo | URL, init?: RequestInit) => {
+      const response = await signedFetch(input, init);
+      const value = await response.json() as { result?: ServerHello };
+      if (value.result?.negotiated_version) value.result.on_decision_failure = "proceed";
+      return Response.json(value);
+    });
+    await expect(client(guardian.url).handshake(newSessionState()))
+      .rejects.toMatchObject({ kind: "signature" });
+
+    guardian = createGuardian((request) => request.method === "handshake/hello" ? { legacyHello: true } : {});
+    vi.stubGlobal("fetch", guardian.fetch);
+    await expect(client(guardian.url).handshake(newSessionState()))
+      .rejects.toMatchObject({ kind: "invalid_schema" });
   });
 
   it("classifies malformed JSON and timeouts", async () => {
@@ -71,6 +102,16 @@ describe("Guardian client", () => {
     const result = await acs.request(state, "system/ping", { echo: "hello" });
     expect(result.decision).toBe("allow");
     expect(guardian.requests.at(-1)?.params.signature).toBeUndefined();
+
+    const errorGuardian = createGuardian((request) => request.method === "system/ping"
+      ? { error: { code: -32001, message: "Ping unavailable" } }
+      : {});
+    vi.stubGlobal("fetch", errorGuardian.fetch);
+    const errorState = newSessionState();
+    const errorClient = client(errorGuardian.url);
+    errorState.handshake = await errorClient.handshake(errorState);
+    await expect(errorClient.request(errorState, "system/ping", {}))
+      .rejects.toMatchObject({ kind: "guardian_error", message: "Ping unavailable" });
   });
 
   it("rejects a response signed under an unexpected key id", async () => {
@@ -78,13 +119,40 @@ describe("Guardian client", () => {
     const originalFetch = guardian.fetch;
     vi.stubGlobal("fetch", async (input: RequestInfo | URL, init?: RequestInit) => {
       const response = await originalFetch(input, init);
+      const request = JSON.parse(String(init?.body)) as { method?: string };
       const value = await response.json() as any;
-      if (value.result?.signature) value.result.signature.key_id = "different-key";
+      if (request.method === "steps/toolCallRequest" && value.result?.signature) {
+        value.result.signature.key_id = "different-key";
+      }
       return Response.json(value);
     });
     const state = newSessionState();
     const acs = client(guardian.url);
-    await expect(acs.handshake(state)).rejects.toMatchObject({ kind: "signature" });
+    state.handshake = await acs.handshake(state);
+    await expect(acs.request(state, "steps/toolCallRequest", toolCallPayload("bash", { command: "pwd" })))
+      .rejects.toMatchObject({ kind: "signature" });
+  });
+
+  it("verifies signed JSON-RPC error envelopes before surfacing the error", async () => {
+    guardian = createGuardian((request) => request.method === "steps/toolCallRequest"
+      ? { error: { code: -32001, message: "Guardian rejected the request" } }
+      : {});
+    vi.stubGlobal("fetch", guardian.fetch);
+    const state = newSessionState();
+    const acs = client(guardian.url);
+    state.handshake = await acs.handshake(state);
+    await expect(acs.request(state, "steps/toolCallRequest", toolCallPayload("bash", { command: "pwd" })))
+      .rejects.toMatchObject({ kind: "guardian_error", message: "Guardian rejected the request" });
+
+    const originalFetch = guardian.fetch;
+    vi.stubGlobal("fetch", async (input: RequestInfo | URL, init?: RequestInit) => {
+      const response = await originalFetch(input, init);
+      const value = await response.json() as { error?: { signature?: unknown } };
+      if (value.error) delete value.error.signature;
+      return Response.json(value);
+    });
+    await expect(acs.request(state, "steps/toolCallRequest", toolCallPayload("bash", { command: "pwd" })))
+      .rejects.toMatchObject({ kind: "signature" });
   });
 
   it("serializes same-session requests so the next request carries the prior chain head", async () => {

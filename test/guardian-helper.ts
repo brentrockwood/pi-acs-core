@@ -1,5 +1,5 @@
 import { deriveSessionKey, signEnvelope, verifyEnvelope } from "../src/crypto.js";
-import type { AcsRequestEnvelope, AcsResponseEnvelope, AcsResult, JsonObject } from "../src/types.js";
+import type { AcsError, AcsRequestEnvelope, AcsResponseEnvelope, AcsResult, ServerHello } from "../src/types.js";
 import { ACS_VERSION } from "../src/types.js";
 
 export const TEST_KEY = "unit-test-key-material-not-for-production";
@@ -9,7 +9,12 @@ export interface GuardianReply {
   status?: number;
   raw?: string;
   delayMs?: number;
+  directHello?: boolean;
+  legacyHello?: boolean;
+  unsignedHello?: boolean;
+  methodsEvaluated?: string[];
   result?: Omit<AcsResult, "type" | "acs_version" | "request_id">;
+  error?: Omit<AcsError, "signature">;
 }
 
 export interface TestGuardian {
@@ -18,11 +23,14 @@ export interface TestGuardian {
   fetch: typeof globalThis.fetch;
 }
 
-function helloPayload(request: AcsRequestEnvelope): JsonObject {
+function helloPayload(request: AcsRequestEnvelope, selectedTransport: "http" | "https" = "http"): ServerHello {
+  const offered = request.params.payload.methods_implemented;
   return {
     negotiated_version: ACS_VERSION,
-    methods_evaluated: request.params.payload.methods_implemented ?? [],
-    selected_transport: "http",
+    methods_evaluated: Array.isArray(offered)
+      ? offered.filter((method): method is string => typeof method === "string")
+      : [],
+    selected_transport: selectedTransport,
     signature_algorithms_supported: ["HMAC-SHA256"],
     timeout_config: { default_ms: 100 },
     on_decision_failure: "deny",
@@ -63,8 +71,22 @@ export function createGuardian(
         headers: { "content-type": "application/json" },
       });
     }
+    if (selected.error) {
+      const error = { ...selected.error } as AcsError;
+      const response: AcsResponseEnvelope = { jsonrpc: "2.0", id: request.id, error };
+      if (request.method !== "system/ping") error.signature = signEnvelope(response, key, TEST_KEY_ID);
+      return Response.json(response, { status: selected.status ?? 200 });
+    }
+    const transport = new URL(String(_input)).protocol === "https:" ? "https" : "http";
+    const hello = helloPayload(request, transport);
+    if (selected.methodsEvaluated) hello.methods_evaluated = [...selected.methodsEvaluated];
+    if (request.method === "handshake/hello" && selected.legacyHello !== true) {
+      const response: AcsResponseEnvelope = { jsonrpc: "2.0", id: request.id, result: hello };
+      if (!selected.unsignedHello) hello.signature = signEnvelope(response, key, TEST_KEY_ID);
+      return Response.json(response, { status: selected.status ?? 200 });
+    }
     const decision = request.method === "handshake/hello"
-      ? { decision: "allow" as const, payload: helloPayload(request) }
+      ? { decision: "allow" as const, payload: hello }
       : selected.result ?? { decision: "allow" as const };
     const result = {
       type: "final",
