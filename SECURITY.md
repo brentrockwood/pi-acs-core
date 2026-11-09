@@ -22,7 +22,7 @@ Use operating-system and service-side controls for consequences that must remain
 
 The Guardian decides what Pi is allowed to do, so its endpoint and key configuration are trusted code-equivalent inputs. The extension reads only an explicitly selected `PI_ACS_CONFIG` file or the global `~/.pi/agent/acs-core.json`; it does not silently accept project-local policy configuration.
 
-Enforcement mode requires HMAC-SHA256 and refuses cleartext HTTP except for loopback hosts. HTTPS protects payload confidentiality in transit; the HMAC authenticates the ACS envelope. Keep the shared key in the environment variable named by `hmacKeyEnv`, rotate it as deployment policy requires, and never commit it to configuration or logs.
+Enforcement mode requires HMAC-SHA256 and refuses cleartext HTTP except for loopback hosts. HTTPS protects payload confidentiality in transit; the HMAC authenticates the ACS envelope. Use at least 32 UTF-8 bytes from a cryptographically secure random source, not a passphrase. Length is checked; randomness cannot be checked. Keep the shared key in the environment variable named by `hmacKeyEnv`, rotate it as deployment policy requires, and never commit it to configuration or logs.
 
 HMAC is symmetric: either endpoint can create a valid record. It is not non-repudiation.
 
@@ -31,11 +31,11 @@ HMAC is symmetric: either endpoint can create a valid record. It is not non-repu
 `startupPosture` controls a failed handshake and must be explicit in enforcement mode:
 
 - `refuse` blocks later input and model tool calls that the extension can mediate.
-- `proceed` starts unguarded and records the bypass if an audit path is configured.
+- `proceed` starts unguarded and records the handshake failure in the configured audit file or stderr.
 
-After a successful handshake, the Guardian's `on_decision_failure` controls malformed responses, transport errors, and timeouts. `deny` fails closed; `proceed` fails open and writes an `acs_fail_open` audit event when a sink is configured.
+After a successful handshake, the Guardian's `on_decision_failure` controls malformed responses, transport errors, and timeouts. `deny` fails closed; `proceed` fails open. Every failed exchange is audited under either posture; the additional `acs_fail_open` event is written when a file sink is configured.
 
-The audit sink is passive. A full disk or permission failure does not change the Guardian verdict and is not currently surfaced to Pi. A deployment that requires durable audit before execution needs a stronger sink and is outside this alpha's claims.
+The audit sink does not change the Guardian verdict. Without a file path, decision failures go to stderr; a failed file write also falls back to stderr. Operators must capture that stream. Durable audit before execution requires a stronger sink and is outside this alpha's claims.
 
 ## Logs and sensitive data
 
@@ -54,3 +54,5 @@ Schema validation does not prove semantic safety. A string can satisfy a tool sc
 ## Reporting a vulnerability
 
 Do not include secrets, private prompts, or exploit data from third parties in a public issue. Open a minimal GitHub issue asking for a private contact channel, or use GitHub's private vulnerability reporting if it is enabled for the repository.
+
+Audit message text is omitted along with payloads unless file payload logging is explicitly enabled. Stderr fallback always omits both, including when an opted-in file sink fails. Failure class, kind and correlation IDs remain available.

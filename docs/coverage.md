@@ -3,8 +3,8 @@
 Target contracts:
 
 - ACS schema version: `0.1.0`
-- ACS source revision: `b865e510e17165258fb65810938086217b28c7ae` (open upstream PR #21 head; proposed repository release `0.1.3`)
-- Reference-adapter revision: `4bdf367916a94ade4577bc9b3a38eae25072faed` (open upstream PR #22 head)
+- ACS source revision: `db457a84393bd80954c9b70b2271a719bf7c61cd` (integration, 2026-11-08; includes merged signing and decision-failure clarifications)
+- Reference-adapter revision: `4bdf367916a94ade4577bc9b3a38eae25072faed` (historical behavior baseline; upstream PR #22 merged on 2026-11-05)
 - Pi package and extension API: `@earendil-works/pi-coding-agent` `0.84.3`, source revision `4e494929998d6bc4fccf75e0a233f727db4b70ee`
 
 The adapter advertises only methods it emits. It currently sends no `profiles_supported` values. In particular, it does not claim `acs-core`. The recorded behavior below is not a conformance assertion.
@@ -43,18 +43,18 @@ The adapter advertises only methods it emits. It currently sends no `profiles_su
 
 ## Integrity and chain state
 
-Requests and decision responses, except `system/ping`, use HMAC-SHA256 when configured. This includes the direct `ServerHello` result added by current PR #22 reference adapters. A signed JSON-RPC error envelope is also verified before the client surfaces its error; a missing or invalid error signature fails as a signature error. `system/ping` errors remain exempt because the pinned schema says the liveness method must not require a signature. Current PR #22 reference adapters sign ordinary errors this way, although the current schema does not define an explicit `error.signature` property. Requiring it for non-ping methods when the session key is available is deliberate conservative interoperability behavior, not a conformance claim. Enforcement mode refuses unsigned configuration. The client verifies JSON-RPC ID, ACS `request_id` where present, signature key ID, applicable response/error signatures, selected transport, negotiated version, accepted profiles, and evaluated-method subset.
+Requests and decision responses, except `system/ping`, use HMAC-SHA256 when configured. This includes the direct `ServerHello` result added by the PR #22 reference adapters. A signed JSON-RPC error envelope is also verified before the client surfaces its error; a missing or invalid error signature fails as a signature error. `system/ping` errors remain exempt because the pinned schema says the liveness method must not require a signature. The PR #22 reference adapters sign ordinary errors this way, although the current schema does not define an explicit `error.signature` property. Requiring it for non-ping methods when the session key is available is deliberate conservative interoperability behavior, not a conformance claim. Enforcement mode refuses unsigned configuration. The client verifies JSON-RPC ID, ACS `request_id` where present, signature key ID, applicable response/error signatures, selected transport, negotiated version, accepted profiles, and evaluated-method subset.
 
 When a Guardian returns `chain_hash`, the adapter propagates it as the next request's `metadata.session_state.chain_hash` and includes the last value at session end. It does not construct or persist the Guardian's append-only ContextEntry chain and therefore does not claim full SessionContext conformance or ACS-Audit.
 
-## Proposed ACS-Core 0.1.3 changes in upstream PR #21
+## Merged ACS-Core floor (upstream PR #21)
 
-PR #21 is open and awaiting re-review as of 2026-09-15. This adapter does not claim that its proposed rules are current ACS requirements or that it satisfies them.
+PR #21 merged on 2026-10-05. These are current requirements, but this adapter does not claim ACS-Core conformance.
 
-- Pi's partial, schema-validated `MODIFY` handling remains opt-in. Under the proposal, `MODIFY` is SHOULD-support; an unapplicable `MODIFY` must normally become `DENY` with audit, with a special `postCompact` exception. This adapter already fails closed on unsupported shapes but does not claim the full proposed contract.
-- `system/ping` is already implemented and sent by the observed agent. The proposal makes it SHOULD-support and requires a deployment-named alternative when omitted; this does not expand the adapter's claim.
-- Raw `protocols/MCP/*` remains absent. The proposal requires wrapped coverage whenever a session involves MCP, except that MCP `tools/call` may use generic tool hooks. Pi's normalized tool calls do not expose resource reads, prompts, notifications, or negotiation, so only a deployment that genuinely never uses MCP could omit the namespace.
-- Pi exposes no built-in subagent abstraction to this adapter, and it emits neither `steps/subagentStart` nor `steps/subagentStop`. The proposal requires `subagentStart` for subagent-capable clients and makes `subagentStop` SHOULD-emit. The adapter does not extend the no-subagent exception to third-party extensions that create child agents outside its view.
+- Pi's partial, schema-validated `MODIFY` handling remains opt-in. Under the merged specification, `MODIFY` is SHOULD-support; an unapplicable `MODIFY` must normally become `DENY` with audit, with a special `postCompact` exception. This adapter already fails closed on unsupported shapes but does not claim the full contract.
+- `system/ping` is already implemented and sent by the observed agent. The specification makes it SHOULD-support and requires a deployment-named alternative when omitted; this does not expand the adapter's claim.
+- Raw `protocols/MCP/*` remains absent. The specification requires wrapped coverage whenever a session involves MCP, except that MCP `tools/call` may use generic tool hooks. Pi's normalized tool calls do not expose resource reads, prompts, notifications, or negotiation, so only a deployment that genuinely never uses MCP could omit the namespace.
+- Pi exposes no built-in subagent abstraction to this adapter, and it emits neither `steps/subagentStart` nor `steps/subagentStop`. The specification requires `subagentStart` for subagent-capable clients and makes `subagentStop` SHOULD-emit. The adapter does not extend the no-subagent exception to third-party extensions that create child agents outside its view.
 - Skill lifecycle hooks are SHOULD-emit when the harness can observe the lifecycle. Pi's available events do not establish the stable id, complete-artifact digest, and activation boundary needed for honest `skillRegister`/`skillLoad`/`skillUnload` messages.
 - Complete SessionContext persistence, full lifecycle coverage, and the exact end-to-end behavior required for a profile remain unproven.
 
@@ -76,3 +76,11 @@ Automated tests currently establish:
 - default audit records omit payload bodies.
 
 The end-to-end fixture uses a deterministic local model server and a loopback Guardian implemented with this repository's test helpers; it establishes Pi adapter behavior, not independent Guardian interoperability or real-model reliability. The tests do not establish containment, universal Pi event coverage, policy quality, Guardian correctness, OWASP approval, or ACS-Core conformance.
+
+## Decision-failure evidence
+
+Every failed client exchange, including handshake negotiation, is recorded once as `acs_decision_failure` with its failure class, request ID and configured posture. Counters are per ACS session. Session-end requests include `summary.decision_failures` for failures observed before the queued shutdown exchange starts; failure of that final exchange remains in the local audit record, not in an already-sent summary. Guardian DENY decisions are not decision failures.
+
+Without an audit path, failure records go to stderr. If a configured file cannot be written, that record falls back to stderr without changing the enforcement decision. Operators must capture stderr or provide a writable audit path; this is not a durable-delivery guarantee. Host-handler records such as `acs_fail_open` provide additional context but do not increment the exchange counter.
+
+Audit message text is omitted along with payloads unless file payload logging is explicitly enabled. Stderr fallback always omits both, including when an opted-in file sink fails. Failure class, kind and correlation IDs remain available.

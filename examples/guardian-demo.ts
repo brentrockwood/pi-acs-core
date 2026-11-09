@@ -10,8 +10,8 @@ const port = Number(process.env.PI_ACS_DEMO_PORT ?? "8787");
 const inputKeyMaterial = process.env.PI_ACS_DEMO_KEY;
 const keyId = "pi-acs-demo";
 
-if (!inputKeyMaterial) {
-  throw new Error("Set PI_ACS_DEMO_KEY to a local test value before starting the demo Guardian");
+if (!inputKeyMaterial || Buffer.byteLength(inputKeyMaterial, "utf8") < 32) {
+  throw new Error("PI_ACS_DEMO_KEY must contain at least 32 UTF-8 bytes");
 }
 
 async function requestBody(request: IncomingMessage): Promise<string> {

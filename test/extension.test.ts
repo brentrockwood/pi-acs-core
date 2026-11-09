@@ -90,6 +90,53 @@ describe("Pi extension enforcement", () => {
     } as unknown as ExtensionContext;
   }
 
+  it.each([
+    { posture: "deny" as const, fails: false, blocked: false },
+    { posture: "proceed" as const, fails: true, blocked: false },
+    { posture: "deny" as const, fails: true, blocked: true },
+  ])("preserves enforcement with an unwritable audit file: %j", async ({ posture, fails, blocked }) => {
+    const stderr = vi.spyOn(console, "error").mockImplementation(() => undefined);
+    const guardian = createGuardian((request) => request.method === "handshake/hello"
+      ? { onDecisionFailure: posture }
+      : fails && request.method === "steps/toolCallRequest" ? { raw: "{" } : {});
+    vi.stubGlobal("fetch", guardian.fetch);
+    auditPath = directory;
+    await configure(guardian.url);
+    const { api, handlers } = fakePi();
+    const ctx = context();
+    acsCoreExtension(api);
+    await oneHandler(handlers, "session_start", { type: "session_start", reason: "startup" }, ctx);
+    const result = await oneHandler(handlers, "tool_call", {
+      type: "tool_call", toolCallId: "probe", toolName: "bash", input: { command: "pwd" },
+    }, ctx);
+    expect(result.block === true).toBe(blocked);
+    const failures = stderr.mock.calls.map(([line]) => JSON.parse(String(line))).filter((record) => record.event === "acs_decision_failure");
+    expect(failures).toHaveLength(fails ? 1 : 0);
+    await oneHandler(handlers, "session_shutdown", { reason: "quit" }, ctx);
+    expect(guardian.requests.at(-1)?.params.payload.summary).toEqual({ decision_failures: fails ? { malformed_response: 1 } : {} });
+    stderr.mockRestore();
+  });
+
+  it("reports decision failure counts at shutdown and resets them for a new session", async () => {
+    const guardian = createGuardian((request) => request.method === "steps/toolCallRequest" ? { raw: "{" } : {});
+    vi.stubGlobal("fetch", guardian.fetch);
+    await configure(guardian.url);
+    const { api, handlers } = fakePi();
+    const ctx = context();
+    acsCoreExtension(api);
+    await oneHandler(handlers, "session_start", { type: "session_start", reason: "startup" }, ctx);
+    await oneHandler(handlers, "tool_call", {
+      type: "tool_call", toolCallId: "failed", toolName: "bash", input: { command: "pwd" },
+    }, ctx);
+    await oneHandler(handlers, "session_shutdown", { reason: "quit" }, ctx);
+    expect(guardian.requests.find((request) => request.method === "steps/sessionEnd")?.params.payload.summary)
+      .toEqual({ decision_failures: { malformed_response: 1 } });
+    await oneHandler(handlers, "session_start", { type: "session_start", reason: "new" }, ctx);
+    await oneHandler(handlers, "session_shutdown", { reason: "quit" }, ctx);
+    expect(guardian.requests.filter((request) => request.method === "steps/sessionEnd").at(-1)?.params.payload.summary)
+      .toEqual({ decision_failures: {} });
+  });
+
   it("blocks deny, validates modify, and correlates parallel tool results", async () => {
     const guardian = createGuardian((request) => {
       if (request.method !== "steps/toolCallRequest") return {};

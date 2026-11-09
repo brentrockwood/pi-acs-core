@@ -13,6 +13,7 @@ export interface GuardianReply {
   legacyHello?: boolean;
   unsignedHello?: boolean;
   methodsEvaluated?: string[];
+  onDecisionFailure?: "proceed" | "deny";
   result?: Omit<AcsResult, "type" | "acs_version" | "request_id">;
   error?: Omit<AcsError, "signature">;
 }
@@ -80,6 +81,7 @@ export function createGuardian(
     const transport = new URL(String(_input)).protocol === "https:" ? "https" : "http";
     const hello = helloPayload(request, transport);
     if (selected.methodsEvaluated) hello.methods_evaluated = [...selected.methodsEvaluated];
+    if (selected.onDecisionFailure) hello.on_decision_failure = selected.onDecisionFailure;
     if (request.method === "handshake/hello" && selected.legacyHello !== true) {
       const response: AcsResponseEnvelope = { jsonrpc: "2.0", id: request.id, result: hello };
       if (!selected.unsignedHello) hello.signature = signEnvelope(response, key, TEST_KEY_ID);
