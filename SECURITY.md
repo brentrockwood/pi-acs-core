@@ -46,7 +46,9 @@ The audit sink does not change the Guardian verdict. Without a file path, decisi
 
 ACS requests may contain prompts, file contents, commands, paths, tool output, and images. The Guardian receives those fields by design. Review its retention and access controls.
 
-Local JSONL audit records replace `payload` with `[omitted]` by default. `includePayloads: true` writes sensitive request and response bodies in plaintext and should be treated accordingly. Files are created with mode `0600`, subject to platform and existing-file behavior.
+Local JSONL audit records replace `payload` and `message` with `[omitted]` by default, so Guardian error text and host-handler messages do not reach the file either. `includePayloads: true` writes sensitive request and response bodies and message text in plaintext and should be treated accordingly. Files are created with mode `0600`, subject to platform and existing-file behavior.
+
+Without `audit.path`, decision-failure records are written to stderr. When a configured file cannot be written, the record also falls back to stderr. The stderr fallback always omits payload and message text, including when an opted-in file sink fails. Failure class, kind, disposition and correlation IDs remain available in every record.
 
 ## Modification safety
 
@@ -60,4 +62,3 @@ Schema validation does not prove semantic safety. A string can satisfy a tool sc
 
 Do not include secrets, private prompts, or exploit data from third parties in a public issue. Open a minimal GitHub issue asking for a private contact channel, or use GitHub's private vulnerability reporting if it is enabled for the repository.
 
-Audit message text is omitted along with payloads unless file payload logging is explicitly enabled. Stderr fallback always omits both, including when an opted-in file sink fails. Failure class, kind and correlation IDs remain available.

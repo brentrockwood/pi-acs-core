@@ -9,7 +9,7 @@ This is an independent early implementation. It is not an official OWASP integra
 ## What works now
 
 - ACS `handshake/hello` over HTTP or HTTPS
-- offline validation against ACS v0.1.0 schemas pinned at commit [`c7ad162`](https://github.com/GenAI-Security-Project/agent-control-standard/commit/c7ad162f69386daac94b89073e3b751e8cdf28b2)
+- offline validation against ACS v0.1.0 schemas pinned at integration commit [`db457a8`](https://github.com/GenAI-Security-Project/agent-control-standard/commit/db457a84393bd80954c9b70b2271a719bf7c61cd); see [vendor/acs/UPSTREAM.md](vendor/acs/UPSTREAM.md)
 - per-session HMAC-SHA256 request and response authentication
 - Guardian ALLOW and DENY enforcement before Pi executes a tool
 - opt-in, schema-validated `parameter_overrides` applied to the same mutable Pi input object that executes
