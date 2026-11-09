@@ -28,12 +28,17 @@ HMAC is symmetric: either endpoint can create a valid record. It is not non-repu
 
 ## Failure posture
 
-`startupPosture` controls a failed handshake and must be explicit in enforcement mode:
+A failed Guardian exchange is resolved by what failed, not only by the configured posture. The pinned specification distinguishes a Guardian that answered from one that did not (§4.1, §6.4). This adapter applies the split the maintainers set out on upstream issue #32 on 2026-11-04 and 2026-11-05 as documented local policy:
 
-- `refuse` blocks later input and model tool calls that the extension can mediate.
-- `proceed` starts unguarded and records the handshake failure in the configured audit file or stderr.
+- **No usable answer** follows the configured posture: a silent Guardian past the timeout, a connection or TLS failure, an HTTP 408 or 5xx without a JSON-RPC body, or an authenticated `-32603` internal error.
+- **A refusal blocks under either posture**: any authenticated JSON-RPC error other than `-32603`, including `SESSION_REFUSED`, `UNSUPPORTED_VERSION` and `PROVENANCE_REQUIRED`, and any other HTTP 4xx without a JSON-RPC body. A JSON-RPC error carried on a non-2xx status is read and verified before the status is used.
+- **An integrity failure blocks under either posture**: a missing or invalid signature, an unexpected key label, a JSON-RPC id or `request_id` mismatch, a malformed or oversized response (a malformed `allow` included), an unsupported decision, or a request this adapter could not form validly.
 
-After a successful handshake, the Guardian's `on_decision_failure` controls malformed responses, transport errors, and timeouts. `deny` fails closed; `proceed` fails open. Every failed exchange is audited under either posture; the additional `acs_fail_open` event is written when a file sink is configured.
+`startupPosture` applies to a handshake that gets no usable answer and must be explicit in enforcement mode. `refuse` blocks later input and model tool calls that the extension can mediate; `proceed` starts unguarded and records `acs_session_unguarded`. A handshake refusal or an unverifiable handshake refuses the session under either value and records `acs_startup_refused`; the refused session also withholds user input at Pi's `input` event. After a successful handshake, the Guardian's `on_decision_failure` applies to steps that get no usable answer: `deny` fails closed; `proceed` fails open and records `acs_fail_open`. Observe mode never blocks.
+
+Two consequences deserve a direct statement. A request payload above the advertised 1 MiB limit is a local request fault: the Guardian never sees it, so in enforce mode the step blocks under either posture, where it previously failed open under `proceed`. A success body on a failure status is contradictory and is treated as an integrity failure rather than honored. Host-handler records label a non-adapter error's `failure_kind` as `other`, not `transport`.
+
+The default posture is unchanged by this classification. The upstream proposal to make `deny` the default and to let a Guardian only tighten the local choice has not merged; adopting it is a separate deployment decision. Every failed exchange is audited under either posture with its failure class, its disposition (`availability`, `refusal` or `integrity`) and, when present, the JSON-RPC error code or HTTP status.
 
 The audit sink does not change the Guardian verdict. Without a file path, decision failures go to stderr; a failed file write also falls back to stderr. Operators must capture that stream. Durable audit before execution requires a stronger sink and is outside this alpha's claims.
 

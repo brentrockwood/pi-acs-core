@@ -7,13 +7,14 @@ import type {
 import { AcsClient } from "./client.js";
 import { loadConfig } from "./config.js";
 import { blockingReason, modifiedToolInput, replaceObject } from "./enforcer.js";
+import { failureDisposition, failureFields } from "./failure.js";
 import {
   newSessionState,
   observableContentPayload,
   toolCallPayload,
   toolResultPayload,
 } from "./mapper.js";
-import { AcsClientError, type AcsResult, type JsonObject } from "./types.js";
+import type { AcsResult, JsonObject } from "./types.js";
 
 type GateOutcome =
   | { action: "allow"; requestId?: string }
@@ -136,8 +137,11 @@ export default function acsCoreExtension(pi: ExtensionAPI): void {
     return config?.mode === "enforce";
   }
 
-  function failureBlocks(): boolean {
+  // Only an availability failure (no usable answer) follows the configured posture.
+  // A refusal or an integrity failure blocks the step under either posture.
+  function failureBlocks(error: unknown): boolean {
     if (!enforcementEnabled() || !config || !client) return false;
+    if (failureDisposition(error) !== "availability") return true;
     return state.handshake ? client.failurePosture(state) === "deny" : config.startupPosture === "refuse";
   }
 
@@ -170,7 +174,7 @@ export default function acsCoreExtension(pi: ExtensionAPI): void {
       event: "acs_fail_open",
       session_id: state.sessionId,
       method,
-      failure_kind: error instanceof AcsClientError ? error.kind : "transport",
+      ...failureFields(error),
       message: errorMessage(error),
     });
   }
@@ -181,7 +185,7 @@ export default function acsCoreExtension(pi: ExtensionAPI): void {
     ctx: ExtensionContext,
   ): Promise<GateOutcome> {
     if (state.refuseActions && enforcementEnabled()) {
-      return { action: "deny", reason: "ACS session is not guarded and startup posture is refuse" };
+      return { action: "deny", reason: state.refusalReason ?? "ACS session is refused" };
     }
     try {
       const result = await request(method, payload);
@@ -189,7 +193,7 @@ export default function acsCoreExtension(pi: ExtensionAPI): void {
       const outcome = await resolveDecision(result, ctx, config?.enableModify === true);
       return { ...outcome, requestId: result.request_id };
     } catch (error) {
-      if (failureBlocks()) return { action: "deny", reason: `ACS decision failure: ${errorMessage(error)}` };
+      if (failureBlocks(error)) return { action: "deny", reason: `ACS decision failure: ${errorMessage(error)}` };
       await recordFailOpen(method, error);
       return { action: "allow" };
     }
@@ -210,17 +214,29 @@ export default function acsCoreExtension(pi: ExtensionAPI): void {
       if (outcome.action !== "allow") {
         state.refuseActions = true;
         const reason = outcome.action === "deny" ? outcome.reason : "sessionStart MODIFY is not meaningful to this adapter";
-        ctx.ui.notify(`ACS session start denied: ${reason}`, "error");
+        state.refusalReason = `ACS session start denied: ${reason}`;
+        ctx.ui.notify(state.refusalReason, "error");
       }
     } catch (error) {
+      // §4.1: a Guardian that answered with a refusal has decided; the startup posture
+      // applies only when no answer arrived. An answer that fails verification is not
+      // an answer this adapter can act on, so it refuses as well.
+      const disposition = failureDisposition(error);
       state.guarded = false;
-      state.refuseActions = enforcementEnabled() && config.startupPosture === "refuse";
+      state.refuseActions = failureBlocks(error);
+      if (state.refuseActions) {
+        state.refusalReason = disposition === "refusal"
+          ? "ACS Guardian refused the session"
+          : disposition === "integrity"
+            ? "ACS Guardian handshake failed verification or local acceptance checks"
+            : "ACS session is not guarded and startup posture is refuse";
+      }
       ctx.ui.setStatus("acs-core", state.refuseActions ? "ACS refused" : "ACS unguarded");
       ctx.ui.notify(`ACS Guardian handshake failed: ${errorMessage(error)}`, state.refuseActions ? "error" : "warning");
       await client.record({
         event: state.refuseActions ? "acs_startup_refused" : "acs_session_unguarded",
         session_id: state.sessionId,
-        failure_kind: error instanceof AcsClientError ? error.kind : "transport",
+        ...failureFields(error),
         message: errorMessage(error),
       });
     }
@@ -359,6 +375,7 @@ export default function acsCoreExtension(pi: ExtensionAPI): void {
         event: "acs_session_end_failure",
         session_id: state.sessionId,
         method: "steps/sessionEnd",
+        ...failureFields(error),
         message: errorMessage(error),
       });
     }

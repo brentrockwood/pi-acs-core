@@ -17,7 +17,7 @@ This is an independent early implementation. It is not an official OWASP integra
 - bounded DEFER timeout handling
 - tool-result blocking or wholesale text replacement before the result returns to the model
 - optional JSONL audit output, with payload bodies omitted by default
-- explicit fail-open or fail-closed startup behavior
+- explicit fail-open or fail-closed behavior for a Guardian that gives no usable answer; signed refusals and verification failures block under either posture
 
 It does not sandbox Pi, mediate direct user shell commands, prevent already-streamed assistant text from appearing, wrap MCP traffic at the protocol layer, or provide an OWASP endorsement. Read [SECURITY.md](SECURITY.md) before using enforcement mode.
 
@@ -45,7 +45,8 @@ Ask Pi to run commands containing these marker strings:
 - `acs-deny` — the demo Guardian denies the tool call.
 - `acs-rewrite` — it replaces the command with a harmless `printf`.
 - `acs-malformed` — it returns invalid JSON so the adapter exercises fail-closed behavior.
-- `acs-delay` — it waits longer than the configured timeout.
+- `acs-refuse` — it returns a signed JSON-RPC refusal, which blocks under either failure posture.
+- `acs-delay` — it waits longer than the configured timeout, which follows the negotiated posture.
 
 The demo Guardian is a fixture, not a policy engine. Its shared key is deliberately local and disposable.
 

@@ -2,7 +2,7 @@ import { createServer, type IncomingMessage, type ServerResponse } from "node:ht
 import { deriveSessionKey, signEnvelope, verifyEnvelope } from "../src/crypto.js";
 import { METHODS_IMPLEMENTED } from "../src/mapper.js";
 import { validateRequest, validateResponse } from "../src/schema.js";
-import type { AcsRequestEnvelope, AcsResponseEnvelope, AcsResult, JsonObject, ServerHello } from "../src/types.js";
+import type { AcsError, AcsRequestEnvelope, AcsResponseEnvelope, AcsResult, JsonObject, ServerHello } from "../src/types.js";
 import { ACS_VERSION } from "../src/types.js";
 
 const host = "127.0.0.1";
@@ -111,6 +111,16 @@ const server = createServer(async (incoming, outgoing) => {
     }
     if (command?.includes("acs-delay")) {
       await new Promise<void>((resolve) => setTimeout(resolve, 5_000));
+    }
+    if (command?.includes("acs-refuse")) {
+      // A signed JSON-RPC error other than -32603 is a refusal: the adapter blocks the
+      // step under either failure posture instead of treating it as an outage.
+      const error: AcsError = { code: -32000, message: "Demo rule refused a command containing acs-refuse" };
+      const refusal: AcsResponseEnvelope = { jsonrpc: "2.0", id: request.id, error };
+      error.signature = signEnvelope(refusal, sessionKey, keyId);
+      validateResponse(refusal);
+      sendJson(outgoing, 200, refusal);
+      return;
     }
 
     let response: AcsResponseEnvelope;

@@ -72,7 +72,8 @@ Automated tests currently establish:
 - a valid override changes the original input object and an invalid override does not partially mutate it;
 - the pinned real Pi CLI loads the extension and routes model-originated Bash calls through it: ALLOW produces the expected filesystem side effect, DENY prevents it, and MODIFY causes the real tool to receive the replacement command;
 - two concurrent allowed tool calls keep distinct result correlations;
-- malformed or timed-out Guardian responses reach the configured decision-failure path;
+- malformed, unsigned, mis-keyed, mis-correlated and signed-refusal Guardian responses block under a negotiated `proceed` posture, while a signed `-32603`, a bare 5xx, a timeout and a refused connection follow it;
+- in the real Pi CLI, a signed handshake refusal with startup `proceed` refuses the session: the prompt is withheld at `input`, no step request is sent, and no Bash side effect occurs;
 - default audit records omit payload bodies.
 
 The end-to-end fixture uses a deterministic local model server and a loopback Guardian implemented with this repository's test helpers; it establishes Pi adapter behavior, not independent Guardian interoperability or real-model reliability. The tests do not establish containment, universal Pi event coverage, policy quality, Guardian correctness, OWASP approval, or ACS-Core conformance.
@@ -80,6 +81,8 @@ The end-to-end fixture uses a deterministic local model server and a loopback Gu
 ## Decision-failure evidence
 
 Every failed client exchange, including handshake negotiation, is recorded once as `acs_decision_failure` with its failure class, request ID and configured posture. Counters are per ACS session. Session-end requests include `summary.decision_failures` for failures observed before the queued shutdown exchange starts; failure of that final exchange remains in the local audit record, not in an already-sent summary. Guardian DENY decisions are not decision failures.
+
+Each failure record also carries a `disposition`: `availability` when no usable answer arrived and the configured posture applied; `refusal` when the Guardian answered with an authenticated JSON-RPC error other than `-32603` or a bare HTTP 4xx other than 408; `integrity` when the answer failed verification or the request could not be formed. Refusal and integrity block in enforce mode under either posture, as SECURITY.md describes. The JSON-RPC `error_code` and `http_status` are recorded when present. `summary.decision_failures` keeps the standard failure classes; no local counter was added to the wire.
 
 Without an audit path, failure records go to stderr. If a configured file cannot be written, that record falls back to stderr without changing the enforcement decision. Operators must capture stderr or provide a writable audit path; this is not a durable-delivery guarantee. Host-handler records such as `acs_fail_open` provide additional context but do not increment the exchange counter.
 
