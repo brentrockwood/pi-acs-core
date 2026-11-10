@@ -64,6 +64,7 @@ Create `~/.pi/agent/acs-core.json`, or set `PI_ACS_CONFIG` to an explicit config
 {
   "mode": "enforce",
   "startupPosture": "refuse",
+  "decisionFailurePosture": "deny",
   "enableModify": false,
   "guardian": {
     "url": "https://guardian.example/acs",
@@ -83,7 +84,7 @@ Create `~/.pi/agent/acs-core.json`, or set `PI_ACS_CONFIG` to an explicit config
 }
 ```
 
-Enforcement mode requires an explicit startup posture and HMAC configuration. Non-loopback Guardians must use HTTPS. `observe` mode reports Guardian decisions but does not apply them. Guardian `MODIFY` decisions are applied only when `enableModify` is explicitly `true`; otherwise they fail closed.
+Both failure postures default to fail-safe. `startupPosture` (default `refuse`) applies to a handshake that gets no usable answer. `decisionFailurePosture` (default `deny`, or `proceed` when `startupPosture` is `proceed`) applies to a later step that gets no usable answer. Only this local configuration can opt into fail-open with `proceed`: the Guardian's negotiated `on_decision_failure` can tighten the local choice to `deny` but cannot loosen it, and a Guardian that omits the field leaves the local value in force. A verified refusal or an unverifiable answer blocks under either value. Enforcement mode requires HMAC configuration. Non-loopback Guardians must use HTTPS. `observe` mode reports Guardian decisions but does not apply them. Guardian `MODIFY` decisions are applied only when `enableModify` is explicitly `true`; otherwise they fail closed.
 
 Inside Pi, `/acs-status` shows the negotiated methods and `/acs-ping` runs the unsigned liveness probe required by the standard.
 

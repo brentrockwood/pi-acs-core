@@ -71,10 +71,12 @@ describe("Pi extension enforcement", () => {
     mode: "observe" | "enforce" = "enforce",
     enableModify = false,
     startupPosture: "proceed" | "refuse" = "refuse",
+    decisionFailurePosture?: "proceed" | "deny",
   ): Promise<void> {
     await writeFile(configPath, JSON.stringify({
       mode,
       startupPosture,
+      ...(decisionFailurePosture ? { decisionFailurePosture } : {}),
       enableModify,
       guardian: { url, hmacKeyEnv: "PI_ACS_TEST_KEY", keyId: "test-key" },
       audit: { path: auditPath, includePayloads: false },
@@ -92,17 +94,19 @@ describe("Pi extension enforcement", () => {
   }
 
   it.each([
-    { posture: "deny" as const, fails: false, blocked: false },
-    { posture: "proceed" as const, fails: true, blocked: false },
-    { posture: "deny" as const, fails: true, blocked: true },
-  ])("preserves enforcement with an unwritable audit file: %j", async ({ posture, fails, blocked }) => {
+    { posture: "deny" as const, local: "deny" as const, fails: false, blocked: false },
+    { posture: "proceed" as const, local: "proceed" as const, fails: true, blocked: false },
+    { posture: "proceed" as const, local: "deny" as const, fails: true, blocked: true },
+    { posture: "deny" as const, local: "proceed" as const, fails: true, blocked: true },
+    { posture: "deny" as const, local: "deny" as const, fails: true, blocked: true },
+  ])("preserves enforcement with an unwritable audit file, with the Guardian only able to tighten the local posture: %j", async ({ posture, local, fails, blocked }) => {
     const stderr = vi.spyOn(console, "error").mockImplementation(() => undefined);
     const guardian = createGuardian((request) => request.method === "handshake/hello"
       ? { onDecisionFailure: posture }
       : fails && request.method === "steps/toolCallRequest" ? { error: { code: -32603, message: "internal" } } : {});
     vi.stubGlobal("fetch", guardian.fetch);
     auditPath = directory;
-    await configure(guardian.url);
+    await configure(guardian.url, "enforce", false, "refuse", local);
     const { api, handlers } = fakePi();
     const ctx = context();
     acsCoreExtension(api);
