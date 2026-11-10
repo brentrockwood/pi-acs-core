@@ -27,6 +27,29 @@ describe("Guardian client", () => {
     }, "/work"));
   }
 
+  it.each([
+    { local: "proceed", negotiated: "proceed", effective: "proceed" },
+    { local: "proceed", negotiated: undefined, effective: "proceed" },
+    { local: "proceed", negotiated: "deny", effective: "deny" },
+    { local: "deny", negotiated: "proceed", effective: "deny" },
+    { local: "deny", negotiated: undefined, effective: "deny" },
+    { local: "deny", negotiated: "deny", effective: "deny" },
+  ] as const)("lets the Guardian tighten the local decision-failure posture but never loosen it: %j", async ({ local, negotiated, effective }) => {
+    guardian = createGuardian();
+    vi.stubGlobal("fetch", guardian.fetch);
+    const acs = new AcsClient(parseConfig({
+      mode: "enforce",
+      startupPosture: "refuse",
+      decisionFailurePosture: local,
+      guardian: { url: guardian.url, hmacKeyEnv: "PI_ACS_TEST_KEY", keyId: "test-key" },
+    }, "/work"));
+    const state = newSessionState();
+    state.handshake = await acs.handshake(state);
+    if (negotiated) state.handshake.on_decision_failure = negotiated;
+    else delete state.handshake.on_decision_failure;
+    expect(acs.failurePosture(state)).toBe(effective);
+  });
+
   it("accepts a signed direct ServerHello over HTTP, correlates ids, and returns a deny", async () => {
     guardian = createGuardian((request) => {
       if (request.method === "handshake/hello") return { directHello: true };

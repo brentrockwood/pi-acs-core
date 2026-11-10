@@ -266,5 +266,5 @@ Acceptance: tag, npm publish, and external announcements are separate human-auth
 1. Canonical target: ACS v0.1.0 at commit `c7ad162f69386daac94b89073e3b751e8cdf28b2`.
 2. ALLOW, DENY, MODIFY, ASK, and DEFER are all normative v0.1 decisions. The alpha implements a documented subset of modification and escalation semantics and fails closed on unsupported shapes.
 3. Initial transport: HTTP(S) JSON-RPC, with HMAC required in enforcement mode.
-4. Default mode: observe. Enforcement is opt-in and requires an explicit startup posture.
+4. Default mode: observe. Enforcement is opt-in; both failure postures default to fail-safe (`refuse`, `deny`) and only local configuration can opt into fail-open.
 5. Repository/package identity: personal GitHub repository and provisional package name `@brentrockwood/pi-acs-core`; no npm publication is authorized yet.
