@@ -57,7 +57,12 @@ async function startGuardian(bin: string): Promise<Guardian> {
   });
   const port = await new Promise<number>((resolve, reject) => {
     let stdout = "";
-    const timer = setTimeout(() => reject(new Error(`Guardian did not report a port in time; stderr: ${stderr.join(" | ")}`)), 15_000);
+    let exited = false;
+    const timer = setTimeout(() => {
+      // Do not leave an orphaned Guardian holding the worker open when startup stalls.
+      if (!exited) child.kill();
+      reject(new Error(`Guardian did not report a port in time; stderr: ${stderr.join(" | ")}`));
+    }, 15_000);
     child.stdout!.on("data", (chunk: Buffer) => {
       stdout += chunk.toString("utf8");
       const match = /ACS_GUARDIAN_LISTENING port=(\d+)/.exec(stdout);
@@ -66,7 +71,12 @@ async function startGuardian(bin: string): Promise<Guardian> {
         resolve(Number(match[1]));
       }
     });
+    child.on("error", (error) => {
+      clearTimeout(timer);
+      reject(new Error(`Guardian could not be started (${error.message}); stderr: ${stderr.join(" | ")}`));
+    });
     child.on("exit", (code) => {
+      exited = true;
       clearTimeout(timer);
       reject(new Error(`Guardian exited with ${code} before listening; stderr: ${stderr.join(" | ")}`));
     });
