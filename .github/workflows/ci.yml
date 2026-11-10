@@ -7,6 +7,11 @@ on:
 permissions:
   contents: read
 
+env:
+  # The interoperability suite runs the upstream example Guardian from the same
+  # specification commit the vendored schemas come from (README, docs/coverage.md).
+  ACS_SPEC_COMMIT: db457a84393bd80954c9b70b2271a719bf7c61cd
+
 jobs:
   test:
     runs-on: ubuntu-latest
@@ -17,6 +22,15 @@ jobs:
           node-version: 22
           cache: npm
       - run: npm ci
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: Install the upstream example Guardian at the pinned specification commit
+        run: |
+          python -m venv "$RUNNER_TEMP/acs-guardian"
+          "$RUNNER_TEMP/acs-guardian/bin/pip" install --quiet "git+https://github.com/GenAI-Security-Project/agent-control-standard@$ACS_SPEC_COMMIT#subdirectory=adapters"
+          "$RUNNER_TEMP/acs-guardian/bin/acs-example-guardian" --help >/dev/null
+          echo "ACS_UPSTREAM_GUARDIAN=$RUNNER_TEMP/acs-guardian/bin/acs-example-guardian" >> "$GITHUB_ENV"
       - run: npm run check
       - run: npm audit --omit=dev
       - run: npm pack --dry-run

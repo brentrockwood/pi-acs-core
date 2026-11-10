@@ -120,6 +120,18 @@ The suite covers schema rejection, strict configuration, signed correlation, tra
 
 Run that test alone with `npm run test:e2e`. It is also included in `npm test` and CI. A local pre-commit hook scans staged content with TruffleHog; enable it with `git config core.hooksPath .githooks` after cloning.
 
+An interoperability suite, `test/guardian-interop.e2e.test.ts`, drives the client against the upstream Python example Guardian from specification commit `db457a8`. It runs when `ACS_UPSTREAM_GUARDIAN` names that executable and is skipped otherwise; CI installs it from that commit. Locally:
+
+```sh
+python3 -m venv .guardian && .guardian/bin/pip install "git+https://github.com/GenAI-Security-Project/agent-control-standard@db457a84393bd80954c9b70b2271a719bf7c61cd#subdirectory=adapters"
+```
+
+```sh
+ACS_UPSTREAM_GUARDIAN=$PWD/.guardian/bin/acs-example-guardian npm test
+```
+
+The recorded evidence and observations are in [docs/coverage.md](docs/coverage.md).
+
 Apache-2.0. The vendored ACS schemas retain their upstream license and notice; see [vendor/acs/UPSTREAM.md](vendor/acs/UPSTREAM.md).
 
 ### Decision-failure audit
