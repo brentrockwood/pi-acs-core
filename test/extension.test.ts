@@ -70,10 +70,11 @@ describe("Pi extension enforcement", () => {
     url: string,
     mode: "observe" | "enforce" = "enforce",
     enableModify = false,
+    startupPosture: "proceed" | "refuse" = "refuse",
   ): Promise<void> {
     await writeFile(configPath, JSON.stringify({
       mode,
-      startupPosture: "refuse",
+      startupPosture,
       enableModify,
       guardian: { url, hmacKeyEnv: "PI_ACS_TEST_KEY", keyId: "test-key" },
       audit: { path: auditPath, includePayloads: false },
@@ -89,6 +90,53 @@ describe("Pi extension enforcement", () => {
       },
     } as unknown as ExtensionContext;
   }
+
+  it.each([
+    { posture: "deny" as const, fails: false, blocked: false },
+    { posture: "proceed" as const, fails: true, blocked: false },
+    { posture: "deny" as const, fails: true, blocked: true },
+  ])("preserves enforcement with an unwritable audit file: %j", async ({ posture, fails, blocked }) => {
+    const stderr = vi.spyOn(console, "error").mockImplementation(() => undefined);
+    const guardian = createGuardian((request) => request.method === "handshake/hello"
+      ? { onDecisionFailure: posture }
+      : fails && request.method === "steps/toolCallRequest" ? { error: { code: -32603, message: "internal" } } : {});
+    vi.stubGlobal("fetch", guardian.fetch);
+    auditPath = directory;
+    await configure(guardian.url);
+    const { api, handlers } = fakePi();
+    const ctx = context();
+    acsCoreExtension(api);
+    await oneHandler(handlers, "session_start", { type: "session_start", reason: "startup" }, ctx);
+    const result = await oneHandler(handlers, "tool_call", {
+      type: "tool_call", toolCallId: "probe", toolName: "bash", input: { command: "pwd" },
+    }, ctx);
+    expect(result.block === true).toBe(blocked);
+    const failures = stderr.mock.calls.map(([line]) => JSON.parse(String(line))).filter((record) => record.event === "acs_decision_failure");
+    expect(failures).toHaveLength(fails ? 1 : 0);
+    await oneHandler(handlers, "session_shutdown", { reason: "quit" }, ctx);
+    expect(guardian.requests.at(-1)?.params.payload.summary).toEqual({ decision_failures: fails ? { guardian_error: 1 } : {} });
+    stderr.mockRestore();
+  });
+
+  it("reports decision failure counts at shutdown and resets them for a new session", async () => {
+    const guardian = createGuardian((request) => request.method === "steps/toolCallRequest" ? { raw: "{" } : {});
+    vi.stubGlobal("fetch", guardian.fetch);
+    await configure(guardian.url);
+    const { api, handlers } = fakePi();
+    const ctx = context();
+    acsCoreExtension(api);
+    await oneHandler(handlers, "session_start", { type: "session_start", reason: "startup" }, ctx);
+    await oneHandler(handlers, "tool_call", {
+      type: "tool_call", toolCallId: "failed", toolName: "bash", input: { command: "pwd" },
+    }, ctx);
+    await oneHandler(handlers, "session_shutdown", { reason: "quit" }, ctx);
+    expect(guardian.requests.find((request) => request.method === "steps/sessionEnd")?.params.payload.summary)
+      .toEqual({ decision_failures: { malformed_response: 1 } });
+    await oneHandler(handlers, "session_start", { type: "session_start", reason: "new" }, ctx);
+    await oneHandler(handlers, "session_shutdown", { reason: "quit" }, ctx);
+    expect(guardian.requests.filter((request) => request.method === "steps/sessionEnd").at(-1)?.params.payload.summary)
+      .toEqual({ decision_failures: {} });
+  });
 
   it("blocks deny, validates modify, and correlates parallel tool results", async () => {
     const guardian = createGuardian((request) => {
@@ -156,6 +204,40 @@ describe("Pi extension enforcement", () => {
     expect(audit).toContain('"adapter_version":"0.1.0-alpha.1"');
     expect(audit).toContain('"pi_version":"0.84.3"');
     expect(audit).toContain('"call_id":"first"');
+  });
+
+  it("does not send unevaluated methods or create dangling result correlation", async () => {
+    const guardian = createGuardian((request) => {
+      if (request.method === "handshake/hello") {
+        return { methodsEvaluated: ["steps/sessionStart", "steps/toolCallResult"] };
+      }
+      if (request.method === "steps/toolCallRequest") {
+        return { error: { code: -32601, message: "method not evaluated" } };
+      }
+      return {};
+    });
+    vi.stubGlobal("fetch", guardian.fetch);
+    await configure(guardian.url);
+    const { api, handlers } = fakePi();
+    const ctx = context();
+    acsCoreExtension(api);
+    await oneHandler(handlers, "session_start", { type: "session_start", reason: "startup" }, ctx);
+
+    await expect(oneHandler(handlers, "tool_call", {
+      type: "tool_call", toolCallId: "unevaluated", toolName: "bash", input: { command: "allowed" },
+    }, ctx)).resolves.toEqual({});
+    await oneHandler(handlers, "tool_result", {
+      type: "tool_result", toolCallId: "unevaluated", toolName: "bash", input: { command: "allowed" },
+      content: [{ type: "text", text: "result" }], isError: false,
+    }, ctx);
+
+    expect(guardian.requests.some((request) => request.method === "steps/toolCallRequest")).toBe(false);
+    const result = guardian.requests.find((request) => request.method === "steps/toolCallResult");
+    expect(result).toBeDefined();
+    expect(result?.params.payload.request_id_ref).toBeUndefined();
+    const audit = await readFile(auditPath, "utf8");
+    expect(audit).toContain('"event":"acs_unevaluated_allow"');
+    expect(audit).toContain('"method":"steps/toolCallRequest"');
   });
 
   it("blocks MODIFY unless it is explicitly enabled", async () => {
@@ -285,6 +367,155 @@ describe("Pi extension enforcement", () => {
     }, ctx);
     expect(result).toMatchObject({ block: true });
     expect(guardian.requests).toHaveLength(1);
+  });
+
+  it.each([
+    { name: "a signed SESSION_REFUSED error", reply: { error: { code: -32000, message: "session refused by policy" } }, disposition: "refusal", code: -32000 },
+    { name: "a signed UNSUPPORTED_VERSION error", reply: { error: { code: -32001, message: "no common version" } }, disposition: "refusal", code: -32001 },
+    { name: "an HTTP 401 without a body", reply: { status: 401, raw: "" }, disposition: "refusal" },
+    { name: "an unverifiable ServerHello", reply: { unsignedHello: true }, disposition: "integrity" },
+    { name: "malformed handshake JSON", reply: { raw: "{broken" }, disposition: "integrity" },
+  ])("refuses the whole session on $name even when startup posture is proceed", async ({ reply, disposition, code }) => {
+    const guardian = createGuardian((request) => request.method === "handshake/hello" ? reply : {});
+    vi.stubGlobal("fetch", guardian.fetch);
+    await configure(guardian.url, "enforce", false, "proceed");
+    const { api, handlers } = fakePi();
+    const ctx = context();
+    acsCoreExtension(api);
+    await oneHandler(handlers, "session_start", { type: "session_start", reason: "startup" }, ctx);
+    expect(ctx.ui.setStatus).toHaveBeenCalledWith("acs-core", "ACS refused");
+
+    const tool = await oneHandler(handlers, "tool_call", {
+      type: "tool_call", toolCallId: "one", toolName: "bash", input: { command: "anything" },
+    }, ctx);
+    expect(tool).toMatchObject({ block: true });
+    const input = await oneHandler(handlers, "input", { type: "input", text: "hello" }, ctx);
+    expect(input).toEqual({ action: "handled" });
+    expect(guardian.requests.filter((request) => request.method !== "handshake/hello")).toHaveLength(0);
+
+    const audit = (await readFile(auditPath, "utf8")).trim().split("\n").map((line) => JSON.parse(line) as Record<string, unknown>);
+    const refused = audit.filter((record) => record.event === "acs_startup_refused");
+    expect(refused).toHaveLength(1);
+    expect(refused[0]).toMatchObject({ disposition, ...(code ? { error_code: code } : {}) });
+    expect(audit.some((record) => record.event === "acs_session_unguarded")).toBe(false);
+  });
+
+  it.each([
+    { name: "a refused connection", reply: undefined, failureKind: "transport" },
+    { name: "an HTTP 503 without a body", reply: { status: 503, raw: "unavailable" }, failureKind: "http" },
+    { name: "a signed internal error", reply: { error: { code: -32603, message: "internal" } }, failureKind: "guardian_error" },
+  ])("starts unguarded on $name only because startup posture is proceed", async ({ reply, failureKind }) => {
+    const guardian = createGuardian((request) => request.method === "handshake/hello" && reply ? reply : {});
+    vi.stubGlobal("fetch", reply ? guardian.fetch : async () => { throw new TypeError("connect ECONNREFUSED"); });
+    await configure(guardian.url, "enforce", false, "proceed");
+    const { api, handlers } = fakePi();
+    const ctx = context();
+    acsCoreExtension(api);
+    await oneHandler(handlers, "session_start", { type: "session_start", reason: "startup" }, ctx);
+    expect(ctx.ui.setStatus).toHaveBeenCalledWith("acs-core", "ACS unguarded");
+    const tool = await oneHandler(handlers, "tool_call", {
+      type: "tool_call", toolCallId: "one", toolName: "bash", input: { command: "anything" },
+    }, ctx);
+    expect(tool).toEqual({});
+    const audit = (await readFile(auditPath, "utf8")).trim().split("\n").map((line) => JSON.parse(line) as Record<string, unknown>);
+    expect(audit.filter((record) => record.event === "acs_session_unguarded")).toEqual([
+      expect.objectContaining({ disposition: "availability", failure_kind: failureKind }),
+    ]);
+    expect(audit.some((record) => record.event === "acs_startup_refused")).toBe(false);
+  });
+
+  it("still follows refuse for an outage at startup", async () => {
+    vi.stubGlobal("fetch", async () => { throw new TypeError("connect ECONNREFUSED"); });
+    await configure("http://127.0.0.1:1/", "enforce", false, "refuse");
+    const { api, handlers } = fakePi();
+    const ctx = context();
+    acsCoreExtension(api);
+    await oneHandler(handlers, "session_start", { type: "session_start", reason: "startup" }, ctx);
+    const tool = await oneHandler(handlers, "tool_call", {
+      type: "tool_call", toolCallId: "one", toolName: "bash", input: { command: "anything" },
+    }, ctx);
+    expect(tool).toMatchObject({ block: true, reason: expect.stringContaining("startup posture is refuse") });
+  });
+
+  it("blocks refusals and integrity failures under a negotiated proceed posture, and fails open only on outages", async () => {
+    let failure = "none";
+    const guardian = createGuardian((request) => {
+      if (request.method === "handshake/hello") return { onDecisionFailure: "proceed" };
+      if (request.method !== "steps/toolCallRequest") return {};
+      switch (failure) {
+        case "refused": return { error: { code: -32000, message: "refused" } };
+        case "refused-on-403": return { status: 403, error: { code: -32000, message: "refused" } };
+        case "http-403": return { status: 403, raw: "" };
+        case "malformed": return { raw: "{" };
+        case "internal": return { error: { code: -32603, message: "internal" } };
+        case "http-503": return { status: 503, raw: "unavailable" };
+        case "timeout": return { delayMs: 200 };
+        default: return {};
+      }
+    });
+    const signedFetch = guardian.fetch;
+    vi.stubGlobal("fetch", async (input: RequestInfo | URL, init?: RequestInit) => {
+      if (failure === "offline") throw new TypeError("offline");
+      const response = await signedFetch(input, init);
+      const request = JSON.parse(String(init?.body)) as { method?: string };
+      if (request.method !== "steps/toolCallRequest") return response;
+      if (!["signature", "key", "id", "request_id", "allow-shape"].includes(failure)) return response;
+      const value = await response.json();
+      if (failure === "signature") value.result.signature.value = "AAAA";
+      if (failure === "key") value.result.signature.key_id = "other-key";
+      if (failure === "id") value.id = "wrong-id";
+      if (failure === "request_id") value.result.request_id = "00000000-0000-4000-8000-000000000000";
+      if (failure === "allow-shape") value.result.decision = "allowed";
+      return Response.json(value);
+    });
+    await configure(guardian.url, "enforce", false, "proceed");
+    const { api, handlers } = fakePi();
+    const ctx = context();
+    acsCoreExtension(api);
+    await oneHandler(handlers, "session_start", { type: "session_start", reason: "startup" }, ctx);
+
+    const blocking = ["refused", "refused-on-403", "http-403", "malformed", "signature", "key", "id", "request_id", "allow-shape"];
+    const open = ["internal", "http-503", "timeout", "offline"];
+    for (const kind of [...blocking, ...open]) {
+      failure = kind;
+      const result = await oneHandler(handlers, "tool_call", {
+        type: "tool_call", toolCallId: kind, toolName: "bash", input: { command: kind },
+      }, ctx);
+      if (blocking.includes(kind)) expect(result, kind).toMatchObject({ block: true });
+      else expect(result, kind).toEqual({});
+    }
+    failure = "none";
+    await oneHandler(handlers, "session_shutdown", { reason: "quit" }, ctx);
+
+    const audit = (await readFile(auditPath, "utf8")).trim().split("\n").map((line) => JSON.parse(line) as Record<string, unknown>);
+    const failures = audit.filter((record) => record.event === "acs_decision_failure");
+    expect(failures).toHaveLength(blocking.length + open.length);
+    expect(failures.every((record) => record.posture === "proceed" && typeof record.disposition === "string")).toBe(true);
+    expect(failures.filter((record) => record.disposition === "availability")).toHaveLength(open.length);
+    expect(audit.filter((record) => record.event === "acs_fail_open")).toHaveLength(open.length);
+    expect(audit.filter((record) => record.event === "acs_tool_blocked")).toHaveLength(blocking.length);
+    const summary = guardian.requests.at(-1)?.params.payload.summary as { decision_failures: Record<string, number> };
+    expect(Object.values(summary.decision_failures).reduce((total, count) => total + count, 0)).toBe(blocking.length + open.length);
+  });
+
+  it("never blocks on a refusal in observe mode", async () => {
+    const guardian = createGuardian((request) => request.method === "handshake/hello"
+      ? { error: { code: -32000, message: "session refused by policy" } }
+      : {});
+    vi.stubGlobal("fetch", guardian.fetch);
+    await configure(guardian.url, "observe", false, "proceed");
+    const { api, handlers } = fakePi();
+    const ctx = context();
+    acsCoreExtension(api);
+    await oneHandler(handlers, "session_start", { type: "session_start", reason: "startup" }, ctx);
+    const result = await oneHandler(handlers, "tool_call", {
+      type: "tool_call", toolCallId: "one", toolName: "bash", input: { command: "anything" },
+    }, ctx);
+    expect(result).toEqual({});
+    const audit = (await readFile(auditPath, "utf8")).trim().split("\n").map((line) => JSON.parse(line) as Record<string, unknown>);
+    expect(audit.filter((record) => record.event === "acs_session_unguarded")).toEqual([
+      expect.objectContaining({ disposition: "refusal", error_code: -32000 }),
+    ]);
   });
 
   it("does not apply Guardian decisions in observe mode", async () => {

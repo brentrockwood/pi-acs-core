@@ -9,7 +9,7 @@ This is an independent early implementation. It is not an official OWASP integra
 ## What works now
 
 - ACS `handshake/hello` over HTTP or HTTPS
-- offline validation against ACS v0.1.0 schemas pinned at commit [`c7ad162`](https://github.com/GenAI-Security-Project/agent-control-standard/commit/c7ad162f69386daac94b89073e3b751e8cdf28b2)
+- offline validation against ACS v0.1.0 schemas pinned at integration commit [`db457a8`](https://github.com/GenAI-Security-Project/agent-control-standard/commit/db457a84393bd80954c9b70b2271a719bf7c61cd); see [vendor/acs/UPSTREAM.md](vendor/acs/UPSTREAM.md)
 - per-session HMAC-SHA256 request and response authentication
 - Guardian ALLOW and DENY enforcement before Pi executes a tool
 - opt-in, schema-validated `parameter_overrides` applied to the same mutable Pi input object that executes
@@ -17,7 +17,7 @@ This is an independent early implementation. It is not an official OWASP integra
 - bounded DEFER timeout handling
 - tool-result blocking or wholesale text replacement before the result returns to the model
 - optional JSONL audit output, with payload bodies omitted by default
-- explicit fail-open or fail-closed startup behavior
+- explicit fail-open or fail-closed behavior for a Guardian that gives no usable answer; signed refusals and verification failures block under either posture
 
 It does not sandbox Pi, mediate direct user shell commands, prevent already-streamed assistant text from appearing, wrap MCP traffic at the protocol layer, or provide an OWASP endorsement. Read [SECURITY.md](SECURITY.md) before using enforcement mode.
 
@@ -28,14 +28,14 @@ Requirements: Node.js 22 or newer, Pi 0.84.3, and a local checkout of this repos
 ```sh
 npm install
 npm run check
-export PI_ACS_DEMO_KEY='local-demo-only'
+export PI_ACS_DEMO_KEY='local-demo-only-not-for-production-32-bytes'
 npm run demo:guardian
 ```
 
 In another terminal:
 
 ```sh
-export PI_ACS_DEMO_KEY='local-demo-only'
+export PI_ACS_DEMO_KEY='local-demo-only-not-for-production-32-bytes'
 export PI_ACS_CONFIG="$PWD/examples/config.json"
 pi -e ./src/index.ts
 ```
@@ -45,7 +45,8 @@ Ask Pi to run commands containing these marker strings:
 - `acs-deny` — the demo Guardian denies the tool call.
 - `acs-rewrite` — it replaces the command with a harmless `printf`.
 - `acs-malformed` — it returns invalid JSON so the adapter exercises fail-closed behavior.
-- `acs-delay` — it waits longer than the configured timeout.
+- `acs-refuse` — it returns a signed JSON-RPC refusal, which blocks under either failure posture.
+- `acs-delay` — it waits longer than the configured timeout, which follows the negotiated posture.
 
 The demo Guardian is a fixture, not a policy engine. Its shared key is deliberately local and disposable.
 
@@ -94,15 +95,17 @@ pi remove git:github.com/brentrockwood/pi-acs-core
 
 ## Protocol choices
 
-The ACS text requires a per-session HMAC key but does not prescribe exact HKDF salt and info bytes. This adapter uses:
+Session keys follow merged ACS §10:
 
 - input key material: UTF-8 bytes from the configured environment variable
-- salt: UTF-8 ACS `session_id`
-- info: UTF-8 `pi-acs-core/v0.1.0/HMAC-SHA256`
+- salt: empty
+- info: the exact transmitted ACS `session_id` string, encoded as UTF-8 without normalization
 - output: 32 bytes using HKDF-SHA256
 - signature input: JCS-canonicalized envelope with its signature field removed
 
-A Guardian must use the same derivation. These byte choices are this adapter's interoperability contract, not a claim about wording absent from ACS v0.1.
+The configured secret must contain at least 32 UTF-8 bytes from a cryptographically secure random source, not a passphrase. Configuration remains literal UTF-8 text: base64-looking values are not decoded. `keyId` remains the configured opaque label.
+
+Upgrade adapters and Guardians together: the previous adapter-specific derivation is no longer accepted, and there is no fallback. The fixed demo key above is for local testing only.
 
 ## Development
 
@@ -117,3 +120,9 @@ The suite covers schema rejection, strict configuration, signed correlation, tra
 Run that test alone with `npm run test:e2e`. It is also included in `npm test` and CI. A local pre-commit hook scans staged content with TruffleHog; enable it with `git config core.hooksPath .githooks` after cloning.
 
 Apache-2.0. The vendored ACS schemas retain their upstream license and notice; see [vendor/acs/UPSTREAM.md](vendor/acs/UPSTREAM.md).
+
+### Decision-failure audit
+
+Failed exchanges are recorded under both failure postures and counted per session in `summary.decision_failures` at session end. Without `audit.path`, these records go to stderr; failed file writes also fall back to stderr. Capture that stream if no writable audit file is configured. Audit delivery does not change enforcement and is not guaranteed durable.
+
+Audit message text is omitted along with payloads unless file payload logging is explicitly enabled. Stderr fallback always omits both, including when an opted-in file sink fails. Failure class, kind and correlation IDs remain available.

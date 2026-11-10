@@ -22,26 +22,33 @@ Use operating-system and service-side controls for consequences that must remain
 
 The Guardian decides what Pi is allowed to do, so its endpoint and key configuration are trusted code-equivalent inputs. The extension reads only an explicitly selected `PI_ACS_CONFIG` file or the global `~/.pi/agent/acs-core.json`; it does not silently accept project-local policy configuration.
 
-Enforcement mode requires HMAC-SHA256 and refuses cleartext HTTP except for loopback hosts. HTTPS protects payload confidentiality in transit; the HMAC authenticates the ACS envelope. Keep the shared key in the environment variable named by `hmacKeyEnv`, rotate it as deployment policy requires, and never commit it to configuration or logs.
+Enforcement mode requires HMAC-SHA256 and refuses cleartext HTTP except for loopback hosts. HTTPS protects payload confidentiality in transit; the HMAC authenticates the ACS envelope. Use at least 32 UTF-8 bytes from a cryptographically secure random source, not a passphrase. Length is checked; randomness cannot be checked. Keep the shared key in the environment variable named by `hmacKeyEnv`, rotate it as deployment policy requires, and never commit it to configuration or logs.
 
 HMAC is symmetric: either endpoint can create a valid record. It is not non-repudiation.
 
 ## Failure posture
 
-`startupPosture` controls a failed handshake and must be explicit in enforcement mode:
+A failed Guardian exchange is resolved by what failed, not only by the configured posture. The pinned specification distinguishes a Guardian that answered from one that did not (§4.1, §6.4). This adapter applies the split the maintainers set out on upstream issue #32 on 2026-11-04 and 2026-11-05 as documented local policy:
 
-- `refuse` blocks later input and model tool calls that the extension can mediate.
-- `proceed` starts unguarded and records the bypass if an audit path is configured.
+- **No usable answer** follows the configured posture: a silent Guardian past the timeout, a connection or TLS failure, an HTTP 408 or 5xx without a JSON-RPC body, or an authenticated `-32603` internal error.
+- **A refusal blocks under either posture**: any authenticated JSON-RPC error other than `-32603`, including `SESSION_REFUSED`, `UNSUPPORTED_VERSION` and `PROVENANCE_REQUIRED`, and any other HTTP 4xx without a JSON-RPC body. A JSON-RPC error carried on a non-2xx status is read and verified before the status is used.
+- **An integrity failure blocks under either posture**: a missing or invalid signature, an unexpected key label, a JSON-RPC id or `request_id` mismatch, a malformed or oversized response (a malformed `allow` included), an unsupported decision, or a request this adapter could not form validly.
 
-After a successful handshake, the Guardian's `on_decision_failure` controls malformed responses, transport errors, and timeouts. `deny` fails closed; `proceed` fails open and writes an `acs_fail_open` audit event when a sink is configured.
+`startupPosture` applies to a handshake that gets no usable answer and must be explicit in enforcement mode. `refuse` blocks later input and model tool calls that the extension can mediate; `proceed` starts unguarded and records `acs_session_unguarded`. A handshake refusal or an unverifiable handshake refuses the session under either value and records `acs_startup_refused`; the refused session also withholds user input at Pi's `input` event. After a successful handshake, the Guardian's `on_decision_failure` applies to steps that get no usable answer: `deny` fails closed; `proceed` fails open and records `acs_fail_open`. Observe mode never blocks.
 
-The audit sink is passive. A full disk or permission failure does not change the Guardian verdict and is not currently surfaced to Pi. A deployment that requires durable audit before execution needs a stronger sink and is outside this alpha's claims.
+Two consequences deserve a direct statement. A request payload above the advertised 1 MiB limit is a local request fault: the Guardian never sees it, so in enforce mode the step blocks under either posture, where it previously failed open under `proceed`. A success body on a failure status is contradictory and is treated as an integrity failure rather than honored. Host-handler records label a non-adapter error's `failure_kind` as `other`, not `transport`.
+
+The default posture is unchanged by this classification. The upstream proposal to make `deny` the default and to let a Guardian only tighten the local choice has not merged; adopting it is a separate deployment decision. Every failed exchange is audited under either posture with its failure class, its disposition (`availability`, `refusal` or `integrity`) and, when present, the JSON-RPC error code or HTTP status.
+
+The audit sink does not change the Guardian verdict. Without a file path, decision failures go to stderr; a failed file write also falls back to stderr. Operators must capture that stream. Durable audit before execution requires a stronger sink and is outside this alpha's claims.
 
 ## Logs and sensitive data
 
 ACS requests may contain prompts, file contents, commands, paths, tool output, and images. The Guardian receives those fields by design. Review its retention and access controls.
 
-Local JSONL audit records replace `payload` with `[omitted]` by default. `includePayloads: true` writes sensitive request and response bodies in plaintext and should be treated accordingly. Files are created with mode `0600`, subject to platform and existing-file behavior.
+Local JSONL audit records replace `payload` and `message` with `[omitted]` by default, so Guardian error text and host-handler messages do not reach the file either. `includePayloads: true` writes sensitive request and response bodies and message text in plaintext and should be treated accordingly. Files are created with mode `0600`, subject to platform and existing-file behavior.
+
+Without `audit.path`, decision-failure records are written to stderr. When a configured file cannot be written, the record also falls back to stderr. The stderr fallback always omits payload and message text, including when an opted-in file sink fails. Failure class, kind, disposition and correlation IDs remain available in every record.
 
 ## Modification safety
 
@@ -54,3 +61,4 @@ Schema validation does not prove semantic safety. A string can satisfy a tool sc
 ## Reporting a vulnerability
 
 Do not include secrets, private prompts, or exploit data from third parties in a public issue. Open a minimal GitHub issue asking for a private contact channel, or use GitHub's private vulnerability reporting if it is enabled for the repository.
+

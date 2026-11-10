@@ -107,6 +107,8 @@ async function runPi(
   modelUrl: string,
   prompt: string,
   enableModify = false,
+  startupPosture: "proceed" | "refuse" = "refuse",
+  expectCompletion = true,
 ): Promise<PiRun> {
   const configDirectory = join(directory, "pi-config");
   const sessionDirectory = join(directory, "sessions");
@@ -114,7 +116,7 @@ async function runPi(
   const auditPath = join(directory, "audit.jsonl");
   await writeFile(configPath, JSON.stringify({
     mode: "enforce",
-    startupPosture: "refuse",
+    startupPosture,
     enableModify,
     guardian: {
       url: `${guardianUrl}/`,
@@ -182,8 +184,10 @@ async function runPi(
     .split("\n")
     .filter((line) => line.trim().startsWith("{"))
     .map((line) => JSON.parse(line) as JsonObject);
-  expect(events.some((event) => event.type === "agent_end")).toBe(true);
-  expect(stdout).toContain("fixture complete");
+  if (expectCompletion) {
+    expect(events.some((event) => event.type === "agent_end")).toBe(true);
+    expect(stdout).toContain("fixture complete");
+  }
   return { events, stderr };
 }
 
@@ -191,7 +195,11 @@ describe("real Pi runtime enforcement", () => {
   let guardianServer: ListeningServer | undefined;
   let modelServer: ListeningServer | undefined;
   const testDirectories = new Set<string>();
+  let refuseHandshake = false;
   const guardian = createGuardian((request) => {
+    if (request.method === "handshake/hello" && refuseHandshake) {
+      return { error: { code: -32000, message: "session refused by end-to-end Guardian" } };
+    }
     if (request.method !== "steps/toolCallRequest") return {};
     const command = commandFrom(request);
     if (command?.includes("acs-deny")) {
@@ -275,6 +283,38 @@ describe("real Pi runtime enforcement", () => {
     expect(guardian.requests.slice(requestOffset).some((request) =>
       request.method === "steps/toolCallRequest" && commandFrom(request)?.includes("acs-deny")
     )).toBe(true);
+  });
+
+  it("refuses the session on a signed handshake refusal even with startup proceed, so no Bash side effect occurs", async () => {
+    const directory = await mkdtemp(join(tmpdir(), "pi-acs-e2e-refused-"));
+    testDirectories.add(directory);
+    const target = join(directory, "refused.txt");
+    const requestOffset = guardian.requests.length;
+    refuseHandshake = true;
+    let run: PiRun;
+    try {
+      // A refused session also blocks the prompt itself at Pi's input event, so the
+      // model is never reached and the run ends without an agent_end event.
+      run = await runPi(
+        directory,
+        guardianServer!.url,
+        modelServer!.url,
+        `printf 'refused' > ${JSON.stringify(target)}`,
+        false,
+        "proceed",
+        false,
+      );
+    } finally {
+      refuseHandshake = false;
+    }
+    expect(run.events.some((event) => event.type === "agent_end")).toBe(false);
+    expect(run.events.some((event) => event.type === "tool_execution_start")).toBe(false);
+    await expect(access(target)).rejects.toMatchObject({ code: "ENOENT" });
+    const seen = guardian.requests.slice(requestOffset);
+    expect(seen.map((request) => request.method)).toEqual(["handshake/hello"]);
+    const audit = (await readFile(join(directory, "audit.jsonl"), "utf8")).trim().split("\n").map((line) => JSON.parse(line) as JsonObject);
+    expect(audit.some((event) => event.event === "acs_startup_refused" && event.disposition === "refusal" && event.error_code === -32000)).toBe(true);
+    expect(audit.some((event) => event.event === "acs_session_unguarded")).toBe(false);
   });
 
   it("executes the Guardian-modified Bash arguments instead of the model arguments", async () => {

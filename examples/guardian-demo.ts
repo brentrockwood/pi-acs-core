@@ -2,7 +2,7 @@ import { createServer, type IncomingMessage, type ServerResponse } from "node:ht
 import { deriveSessionKey, signEnvelope, verifyEnvelope } from "../src/crypto.js";
 import { METHODS_IMPLEMENTED } from "../src/mapper.js";
 import { validateRequest, validateResponse } from "../src/schema.js";
-import type { AcsRequestEnvelope, AcsResponseEnvelope, AcsResult, JsonObject } from "../src/types.js";
+import type { AcsError, AcsRequestEnvelope, AcsResponseEnvelope, AcsResult, JsonObject, ServerHello } from "../src/types.js";
 import { ACS_VERSION } from "../src/types.js";
 
 const host = "127.0.0.1";
@@ -10,8 +10,8 @@ const port = Number(process.env.PI_ACS_DEMO_PORT ?? "8787");
 const inputKeyMaterial = process.env.PI_ACS_DEMO_KEY;
 const keyId = "pi-acs-demo";
 
-if (!inputKeyMaterial) {
-  throw new Error("Set PI_ACS_DEMO_KEY to a local test value before starting the demo Guardian");
+if (!inputKeyMaterial || Buffer.byteLength(inputKeyMaterial, "utf8") < 32) {
+  throw new Error("PI_ACS_DEMO_KEY must contain at least 32 UTF-8 bytes");
 }
 
 async function requestBody(request: IncomingMessage): Promise<string> {
@@ -33,26 +33,24 @@ function toolCommand(payload: JsonObject): string | undefined {
   return typeof value === "string" ? value : undefined;
 }
 
+function serverHelloFor(request: AcsRequestEnvelope): ServerHello {
+  const offered = request.params.payload.methods_implemented;
+  const methods = Array.isArray(offered)
+    ? offered.filter((method): method is string => typeof method === "string" && METHODS_IMPLEMENTED.includes(method as never))
+    : [];
+  return {
+    negotiated_version: ACS_VERSION,
+    methods_evaluated: methods,
+    selected_transport: "http",
+    signature_algorithms_supported: ["HMAC-SHA256"],
+    timeout_config: { default_ms: 2_000 },
+    on_decision_failure: "deny",
+    policy_requires_provenance: false,
+    profiles_accepted: [],
+  };
+}
+
 function decisionFor(request: AcsRequestEnvelope): Omit<AcsResult, "type" | "acs_version" | "request_id"> {
-  if (request.method === "handshake/hello") {
-    const offered = request.params.payload.methods_implemented;
-    const methods = Array.isArray(offered)
-      ? offered.filter((method): method is string => typeof method === "string" && METHODS_IMPLEMENTED.includes(method as never))
-      : [];
-    return {
-      decision: "allow",
-      payload: {
-        negotiated_version: ACS_VERSION,
-        methods_evaluated: methods,
-        selected_transport: "http",
-        signature_algorithms_supported: ["HMAC-SHA256"],
-        timeout_config: { default_ms: 2_000 },
-        on_decision_failure: "deny",
-        policy_requires_provenance: false,
-        profiles_accepted: [],
-      },
-    };
-  }
   if (request.method === "system/ping") {
     return {
       decision: "allow",
@@ -114,15 +112,32 @@ const server = createServer(async (incoming, outgoing) => {
     if (command?.includes("acs-delay")) {
       await new Promise<void>((resolve) => setTimeout(resolve, 5_000));
     }
+    if (command?.includes("acs-refuse")) {
+      // A signed JSON-RPC error other than -32603 is a refusal: the adapter blocks the
+      // step under either failure posture instead of treating it as an outage.
+      const error: AcsError = { code: -32000, message: "Demo rule refused a command containing acs-refuse" };
+      const refusal: AcsResponseEnvelope = { jsonrpc: "2.0", id: request.id, error };
+      error.signature = signEnvelope(refusal, sessionKey, keyId);
+      validateResponse(refusal);
+      sendJson(outgoing, 200, refusal);
+      return;
+    }
 
-    const result = {
-      type: "final",
-      acs_version: ACS_VERSION,
-      request_id: request.params.request_id,
-      ...decisionFor(request),
-    } as AcsResult;
-    const response: AcsResponseEnvelope = { jsonrpc: "2.0", id: request.id, result };
-    if (request.method !== "system/ping") result.signature = signEnvelope(response, sessionKey, keyId);
+    let response: AcsResponseEnvelope;
+    if (request.method === "handshake/hello") {
+      const result = serverHelloFor(request);
+      response = { jsonrpc: "2.0", id: request.id, result };
+      result.signature = signEnvelope(response, sessionKey, keyId);
+    } else {
+      const result = {
+        type: "final",
+        acs_version: ACS_VERSION,
+        request_id: request.params.request_id,
+        ...decisionFor(request),
+      } as AcsResult;
+      response = { jsonrpc: "2.0", id: request.id, result };
+      if (request.method !== "system/ping") result.signature = signEnvelope(response, sessionKey, keyId);
+    }
     validateResponse(response);
     sendJson(outgoing, 200, response);
   } catch (error) {
