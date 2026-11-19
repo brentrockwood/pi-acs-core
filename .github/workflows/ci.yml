@@ -11,6 +11,8 @@ env:
   # The interoperability suite runs the upstream example Guardian from the same
   # specification commit the vendored schemas come from (README, docs/coverage.md).
   ACS_SPEC_COMMIT: db457a84393bd80954c9b70b2271a719bf7c61cd
+  # Separate pin: the independent emission oracle does not change our vendored schemas.
+  ACS_CAPTURE_COMMIT: 02b24e7c1398794957f8b54ceed0c8a54292706f
 
 jobs:
   test:
@@ -31,6 +33,12 @@ jobs:
           "$RUNNER_TEMP/acs-guardian/bin/pip" install --quiet "git+https://github.com/GenAI-Security-Project/agent-control-standard@$ACS_SPEC_COMMIT#subdirectory=adapters"
           "$RUNNER_TEMP/acs-guardian/bin/acs-example-guardian" --help >/dev/null
           echo "ACS_UPSTREAM_GUARDIAN=$RUNNER_TEMP/acs-guardian/bin/acs-example-guardian" >> "$GITHUB_ENV"
+      - name: Install the pinned upstream emission oracle
+        run: |
+          python -m venv "$RUNNER_TEMP/acs-capture"
+          "$RUNNER_TEMP/acs-capture/bin/pip" install --quiet "git+https://github.com/GenAI-Security-Project/agent-control-standard@$ACS_CAPTURE_COMMIT#subdirectory=adapters"
+          "$RUNNER_TEMP/acs-capture/bin/python" -I -c "from acs.testing.capture_guardian import CaptureGuardian"
+          echo "ACS_CAPTURE_PYTHON=$RUNNER_TEMP/acs-capture/bin/python" >> "$GITHUB_ENV"
       - run: npm run check
       - run: npm audit --omit=dev
       - run: npm pack --dry-run

@@ -7,6 +7,7 @@ import { fileURLToPath } from "node:url";
 import { afterAll, afterEach, beforeAll, describe, expect, it } from "vitest";
 import type { AcsRequestEnvelope, JsonObject } from "../src/types.js";
 import { createGuardian, TEST_KEY, TEST_KEY_ID } from "./guardian-helper.js";
+import { startCaptureGuardian, type CaptureReport } from "./upstream-capture-helper.js";
 
 const repositoryRoot = resolve(dirname(fileURLToPath(import.meta.url)), "..");
 const piCli = resolve(repositoryRoot, "node_modules/@earendil-works/pi-coding-agent/dist/bundle/cli.js");
@@ -99,6 +100,16 @@ function sendCompletion(response: import("node:http").ServerResponse, command: s
     response.write(`data: ${completionChunk({}, "stop")}\n\n`);
   }
   response.end("data: [DONE]\n\n");
+}
+
+async function startModelServer(): Promise<ListeningServer> {
+  return listen(createServer(async (request, response) => {
+    const payload = JSON.parse(await bodyOf(request)) as { messages?: Array<{ role?: string; content?: unknown }> };
+    const hasToolResult = payload.messages?.some((message) => message.role === "tool") === true;
+    const userMessage = payload.messages?.find((message) => message.role === "user");
+    const prompt = messageText(userMessage?.content);
+    sendCompletion(response, hasToolResult ? undefined : prompt);
+  }));
 }
 
 async function runPi(
@@ -233,13 +244,7 @@ describe("real Pi runtime enforcement", () => {
       response.end(responseBody);
     }));
 
-    modelServer = await listen(createServer(async (request, response) => {
-      const payload = JSON.parse(await bodyOf(request)) as { messages?: Array<{ role?: string; content?: unknown }> };
-      const hasToolResult = payload.messages?.some((message) => message.role === "tool") === true;
-      const userMessage = payload.messages?.find((message) => message.role === "user");
-      const prompt = messageText(userMessage?.content);
-      sendCompletion(response, hasToolResult ? undefined : prompt);
-    }));
+    modelServer = await startModelServer();
   });
 
   afterAll(async () => {
@@ -329,5 +334,117 @@ describe("real Pi runtime enforcement", () => {
       true,
     );
     expect(await readFile(target, "utf8")).toBe("modified");
+  });
+}, 30_000);
+
+// These CLI sessions exercise text input/output and Bash mediation, not every Pi host hook.
+describe.skipIf(!process.env.ACS_CAPTURE_PYTHON)("real Pi emissions validated by upstream Python CaptureGuardian", () => {
+  let modelServer: ListeningServer;
+
+  beforeAll(async () => {
+    modelServer = await startModelServer();
+  });
+
+  afterAll(async () => {
+    if (modelServer) await close(modelServer.server);
+  });
+
+  it.each(["allow", "deny"] as const)("validates the %s session and enforces its Bash decision", async (decision) => {
+    const directory = await mkdtemp(join(tmpdir(), "pi-acs-upstream-"));
+    try {
+      const target = join(directory, "side-effect.txt");
+      const command = `printf 'upstream-ok' > ${JSON.stringify(target)}`
+        + (decision === "deny" ? " # acs-deny" : "");
+      const guardian = await startCaptureGuardian();
+      let report: CaptureReport;
+      let run: PiRun;
+      try {
+        run = await runPi(directory, guardian.url, modelServer.url, command);
+      } finally {
+        // Always reap Python; finish also rejects empty captures and validation/process faults.
+        report = await guardian.finish();
+      }
+      expect(report.errors).toEqual([]);
+      expect(report.captures.length).toBeGreaterThan(0);
+      for (const capture of report.captures) {
+        expect(capture.errors).toEqual([]);
+        expect(capture.method).toBe(capture.parsed.method);
+      }
+      const requests = report.captures.map((capture) => capture.parsed);
+      const methods = [
+        "steps/sessionStart",
+        "steps/userMessage",
+        "steps/toolCallRequest",
+        ...(decision === "allow" ? ["steps/toolCallResult"] : []),
+        "steps/agentResponse",
+        "steps/sessionEnd",
+      ];
+      // Exact ordering also requires one handshake, one complete lifecycle, and no extra calls.
+      expect(requests.map((request) => request.method)).toEqual(["handshake/hello", ...methods]);
+      const hello = requests[0]!;
+      expect(hello.params.payload).toMatchObject({
+        acs_versions_supported: ["0.1.0"],
+        methods_implemented: expect.arrayContaining(methods),
+        transports_supported: ["http", "https"],
+        provenance_producer: "none",
+        profiles_supported: [],
+      });
+      const sessionId = hello.params.metadata.session_id;
+      expect(sessionId).toEqual(expect.any(String));
+      expect(sessionId.length).toBeGreaterThan(0);
+      expect(new Set(requests.map((request) => request.id)).size).toBe(requests.length);
+      expect(new Set(requests.map((request) => request.params.nonce)).size).toBe(requests.length);
+      for (const request of requests) {
+        expect(request.id).toBe(request.params.request_id);
+        expect(request.id.length).toBeGreaterThan(0);
+        expect(request.params.nonce).toEqual(expect.any(String));
+        expect(request.params.metadata).toMatchObject({
+          agent_id: "pi-coding-agent",
+          session_id: sessionId,
+          environment: "development",
+          platform: "pi",
+          platform_version: "0.84.3",
+        });
+        expect(request.params.signature).toMatchObject({ algorithm: "HMAC-SHA256", key_id: TEST_KEY_ID });
+      }
+      const payloadFor = (method: string) => requests.find((request) => request.method === method)!.params.payload;
+      expect(payloadFor("steps/userMessage")).toMatchObject({ content: [{ type: "text", value: command }] });
+      const toolRequest = requests.find((request) => request.method === "steps/toolCallRequest")!;
+      expect(commandFrom(toolRequest)).toBe(command);
+      expect(toolRequest.params.payload).toMatchObject({ tool: { name: "bash" }, raw_command: command });
+      expect(payloadFor("steps/agentResponse")).toMatchObject({
+        content: [{ type: "text", value: "fixture complete" }],
+      });
+      expect(payloadFor("steps/sessionEnd")).toMatchObject({ summary: { decision_failures: {} } });
+      const audit = (await readFile(join(directory, "audit.jsonl"), "utf8")).trim().split("\n")
+        .map((line) => JSON.parse(line) as JsonObject);
+      expect(audit.filter((event) => [
+        "acs_startup_refused", "acs_session_unguarded", "acs_decision_failure", "acs_session_end_failure",
+      ].includes(String(event.event)))).toEqual([]);
+      // These records are emitted only after reply correlation and signature verification.
+      for (const request of requests.slice(1)) {
+        expect(audit.filter((event) => event.event === "acs_decision" && event.request_id === request.id))
+          .toEqual([expect.objectContaining({
+            method: request.method,
+            session_id: sessionId,
+            decision: request.method === "steps/toolCallRequest" ? decision : "allow",
+          })]);
+      }
+      if (decision === "allow") {
+        expect(await readFile(target, "utf8")).toBe("upstream-ok");
+        expect(run.events).toContainEqual(expect.objectContaining({ type: "tool_execution_end", isError: false }));
+        expect(payloadFor("steps/toolCallResult")).toMatchObject({
+          tool: { name: "bash" }, request_id_ref: toolRequest.id, exit_status: "success",
+        });
+      } else {
+        await expect(access(target)).rejects.toMatchObject({ code: "ENOENT" });
+        expect(audit).toContainEqual(expect.objectContaining({
+          event: "acs_tool_blocked", request_id: toolRequest.id, decision: "deny", tool: "bash",
+        }));
+        expect(audit.some((event) => event.event === "acs_tool_completed")).toBe(false);
+      }
+    } finally {
+      await rm(directory, { recursive: true, force: true });
+    }
   });
 }, 30_000);

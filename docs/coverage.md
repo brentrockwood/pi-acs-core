@@ -1,5 +1,7 @@
 # Coverage and conformance boundary
 
+Independent upstream emission validation and the reference-test coverage comparison are recorded in [Upstream emission tests — 2026-11-19](upstream-emission.md). That evidence covers the listed real-host flows, not every advertised capability or full ACS-Core conformance.
+
 Target contracts:
 
 - ACS schema version: `0.1.0`
@@ -88,6 +90,10 @@ Each failure record also carries a `disposition`: `availability` when no usable 
 Without an audit path, failure records go to stderr. If a configured file cannot be written, that record falls back to stderr without changing the enforcement decision. Operators must capture stderr or provide a writable audit path; this is not a durable-delivery guarantee. Host-handler records such as `acs_fail_open` provide additional context but do not increment the exchange counter.
 
 Audit message text is omitted along with payloads unless file payload logging is explicitly enabled. Stderr fallback always omits both, including when an opted-in file sink fails. Failure class, kind and correlation IDs remain available.
+
+## Go Guardian interoperability — 2026-11-18
+
+The optional Go suites establish signed wire exchanges and real Pi allow/deny enforcement against the merged Go Guardian with its pinned AGT runtime and stock policy. The allowed command writes a temporary file and receives a correlated signed result decision; a harmless command containing a policy-matching comment is denied before writing. See [the pinned evidence and reproduction steps](go-guardian-interop.md). This supplements the Python example below; it does not extend the adapter's conformance or policy-security claims.
 
 ## Independent Guardian interoperability — 2026-11-10
 
