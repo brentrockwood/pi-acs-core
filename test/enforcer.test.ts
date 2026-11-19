@@ -20,6 +20,15 @@ describe("tool modification", () => {
     expect(input).toEqual({ command: "after", count: 1 });
   });
 
+  it("leaves the original untouched when a valid override is mixed with an invalid one", () => {
+    const input = { command: "before", count: 1 };
+    const before = structuredClone(input);
+    expect(() => modifiedToolInput(input, {
+      parameter_overrides: { command: "after", count: "wrong" },
+    }, tool)).toThrow("must be number");
+    expect(input).toStrictEqual(before);
+  });
+
   it("fails closed on invalid or unsupported modification shapes", () => {
     expect(() => modifiedToolInput({ command: "before" }, { parameter_overrides: { count: "wrong" } }, tool))
       .toThrow("must be number");

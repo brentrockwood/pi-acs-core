@@ -36,6 +36,7 @@ export function verifyEnvelope(envelope: SignableEnvelope, key: Buffer, signatur
   if (signature.algorithm !== "HMAC-SHA256") return false;
   const expected = signEnvelope(envelope, key, signature.key_id).value;
   const actualBytes = Buffer.from(signature.value, "base64");
+  if (actualBytes.toString("base64") !== signature.value) return false;
   const expectedBytes = Buffer.from(expected, "base64");
   return actualBytes.length === expectedBytes.length && timingSafeEqual(actualBytes, expectedBytes);
 }

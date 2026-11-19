@@ -4,7 +4,7 @@ import { join } from "node:path";
 import type { ExtensionAPI, ExtensionContext } from "@earendil-works/pi-coding-agent";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import acsCoreExtension from "../src/index.js";
-import type { AcsRequestEnvelope, JsonObject } from "../src/types.js";
+import type { AcsRequestEnvelope, AcsResult, JsonObject } from "../src/types.js";
 import { createGuardian, TEST_KEY } from "./guardian-helper.js";
 
 type Handler = (event: any, context: ExtensionContext) => Promise<any> | any;
@@ -63,6 +63,7 @@ describe("Pi extension enforcement", () => {
   afterEach(() => {
     delete process.env.PI_ACS_CONFIG;
     delete process.env.PI_ACS_TEST_KEY;
+    vi.useRealTimers();
     vi.unstubAllGlobals();
   });
 
@@ -311,6 +312,152 @@ describe("Pi extension enforcement", () => {
     }, ctx);
     expect(result).toEqual({});
     expect(confirm).toHaveBeenCalledWith("ACS approval: operator", "Run this command?", expect.any(Object));
+  });
+
+  async function decisionHarness(result: Omit<AcsResult, "type" | "acs_version" | "request_id">, ctx: ExtensionContext) {
+    const guardian = createGuardian((request) => request.method === "steps/toolCallRequest" ? { result } : {});
+    vi.stubGlobal("fetch", guardian.fetch);
+    await configure(guardian.url, "enforce", true);
+    const { api, handlers } = fakePi();
+    acsCoreExtension(api);
+    await oneHandler(handlers, "session_start", { type: "session_start", reason: "startup" }, ctx);
+    const input = { command: "original" };
+    return {
+      input,
+      call: () => oneHandler(handlers, "tool_call", {
+        type: "tool_call", toolCallId: "boundary", toolName: "bash", input,
+      }, ctx),
+    };
+  }
+
+  function ask(details: JsonObject = {}): Omit<AcsResult, "type" | "acs_version" | "request_id"> {
+    return {
+      decision: "ask",
+      reasoning: "human approval required",
+      ask_details: {
+        approver: { type: "human", id: "operator" },
+        question: "Run this command?",
+        timeout_seconds: 5,
+        ...details,
+      },
+    };
+  }
+
+  // Wait for the decision timer, not client/audit I/O, before advancing fake time.
+  function decisionTimer(): Promise<void> {
+    vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
+    const setTimeout = globalThis.setTimeout;
+    return new Promise((resolve) => {
+      const spy = vi.spyOn(globalThis, "setTimeout").mockImplementation(((callback: (...args: any[]) => void, delay?: number, ...args: any[]) => {
+        const timer = setTimeout(callback, delay, ...args);
+        if (delay === 5000) {
+          spy.mockRestore();
+          resolve();
+        }
+        return timer;
+      }) as typeof globalThis.setTimeout);
+    });
+  }
+
+  it.each(["reject", "throw", "reject promise"])("fails closed when human ASK UI returns %s", async (response) => {
+    const confirm = vi.fn(() => {
+      if (response === "throw") throw new Error("UI unavailable");
+      if (response === "reject promise") return Promise.reject(new Error("UI disconnected"));
+      return Promise.resolve(false);
+    });
+    const harness = await decisionHarness(ask(), context(confirm));
+    vi.useFakeTimers();
+    expect(await harness.call()).toEqual({
+      block: true,
+      reason: response === "reject" ? "human approval required" : "ACS approval UI failed",
+    });
+    expect(confirm).toHaveBeenCalledOnce();
+    expect(harness.input).toStrictEqual({ command: "original" });
+    expect(vi.getTimerCount()).toBe(0);
+  });
+
+  it.each([undefined, "deny", "allow"] as const)("resolves ASK timeout with disposition %s", async (disposition) => {
+    const confirm = vi.fn<(title: string, question: string, options?: { signal?: AbortSignal }) => Promise<boolean>>(() => new Promise(() => {}));
+    const harness = await decisionHarness(ask(disposition ? { timeout_disposition: disposition } : {}), context(confirm));
+    const ready = decisionTimer();
+    const settled = vi.fn();
+    const pending = harness.call().then((result) => { settled(); return result; });
+    await ready;
+    const signal = confirm.mock.calls[0]?.[2]?.signal;
+    expect(signal?.aborted).toBe(false);
+    await vi.advanceTimersByTimeAsync(4999);
+    expect(settled).not.toHaveBeenCalled();
+    expect(harness.input).toStrictEqual({ command: "original" });
+    await vi.advanceTimersByTimeAsync(1);
+    expect(await pending).toEqual(disposition === "allow" ? {} : { block: true, reason: "ACS approval timed out" });
+    expect(signal?.aborted).toBe(true);
+    expect(harness.input).toStrictEqual({ command: "original" });
+    expect(vi.getTimerCount()).toBe(0);
+  });
+
+  it.each([
+    { approver: { type: "agent", id: "reviewer" } },
+    { approver: { type: "service", id: "reviewer", endpoint: "https://example.com/approve" } },
+    { options: ["approve", "reject"] },
+    { intent_extension: { capabilities: [{ tool: "bash", operation: "execute" }], scope: "session" } },
+  ])("rejects unsupported but schema-valid ASK routing: %j", async (details) => {
+    const confirm = vi.fn(async () => true);
+    const harness = await decisionHarness(ask(details), context(confirm));
+    expect(await harness.call()).toEqual({ block: true, reason: "Guardian returned an ASK this adapter cannot route" });
+    expect(confirm).not.toHaveBeenCalled();
+    expect(harness.input).toStrictEqual({ command: "original" });
+  });
+
+  it.each([
+    { timeout: undefined, response: "unused", reason: "waiting for policy" },
+    { timeout: "deny", response: "unused", reason: "waiting for policy" },
+    { timeout: "ask", response: "approve", reason: undefined },
+    { timeout: "ask", response: "reject", reason: "Deferred action was not approved" },
+    { timeout: "ask", response: "throw", reason: "Deferred action could not be approved" },
+    { timeout: "ask", response: "reject promise", reason: "Deferred action could not be approved" },
+  ])("waits before resolving DEFER: %j", async ({ timeout, response, reason }) => {
+    const confirm = vi.fn(() => {
+      if (response === "throw") throw new Error("UI unavailable");
+      if (response === "reject promise") return Promise.reject(new Error("UI disconnected"));
+      return Promise.resolve(response === "approve");
+    });
+    const harness = await decisionHarness({
+      decision: "defer",
+      reasoning: "waiting for policy",
+      defer_details: {
+        reason: "pending_dependency", resolution_method: "timeout", resolution_timeout_ms: 5000,
+        ...(timeout ? { timeout_decision: timeout } : {}),
+      },
+    }, context(confirm));
+    const ready = decisionTimer();
+    const settled = vi.fn();
+    const pending = harness.call().then((result) => { settled(); return result; });
+    await ready;
+    await vi.advanceTimersByTimeAsync(4999);
+    expect(settled).not.toHaveBeenCalled();
+    expect(confirm).not.toHaveBeenCalled();
+    expect(harness.input).toStrictEqual({ command: "original" });
+    await vi.advanceTimersByTimeAsync(1);
+    expect(await pending).toEqual(reason ? { block: true, reason } : {});
+    if (timeout === "ask") {
+      expect(confirm).toHaveBeenCalledExactlyOnceWith("ACS deferred decision", "waiting for policy\n\nProceed anyway?");
+    } else {
+      expect(confirm).not.toHaveBeenCalled();
+    }
+    expect(harness.input).toStrictEqual({ command: "original" });
+    expect(vi.getTimerCount()).toBe(0);
+  });
+
+  it("does not partially apply a mixed-validity MODIFY rejected by the tool schema", async () => {
+    const harness = await decisionHarness({
+      decision: "modify",
+      reasoning: "attempt mixed overrides",
+      modifications: { parameter_overrides: { command: "rewritten", unsupported: true } },
+    }, context());
+    expect(await harness.call()).toEqual({
+      block: true, reason: expect.stringContaining("must NOT have additional properties"),
+    });
+    expect(harness.input).toStrictEqual({ command: "original" });
   });
 
   it("gates tool results and finalized assistant content", async () => {

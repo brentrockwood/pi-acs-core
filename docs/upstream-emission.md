@@ -78,17 +78,17 @@ Those suites import upstream code, so simply running them would not test this ad
 
 | Area | Existing local evidence | Remaining gap or distinction |
 | --- | --- | --- |
-| Response binding | `test/client.test.ts`: signed/unsigned/tampered hello, key labels, refusal signatures, JSON-RPC ID mismatch | Add independently signed wrong ACS `request_id` and contradictory-response cases; `A/core/test_response_binding.py` is the reference. Source checks are not equivalent to negative-test coverage. |
-| Deadlines | `test/client.test.ts`: negotiated default timeout | No dedicated real stalled/dripping response-body or per-method timeout-precedence test. Compare `A/client/test_exchange.py`, `OverallDeadline`. |
+| Response binding | `test/client.test.ts` plus `test/client-boundaries.test.ts`: re-signed wrong ACS `request_id`, wrong hello/error JSON-RPC IDs, contradictory result/error envelopes | These negatives verify the fixture signature before delivery, separating binding/schema rejection from bad-signature rejection. |
+| Deadlines | `test/client-boundaries.test.ts`: real stalled/dripping HTTP bodies and default/per-method/explicit deadline precedence | Prompt headers do not end the total response deadline. Timing checks have margins, not a real-time scheduling guarantee. |
 | Failure posture | Client and host-handler tests distinguish refusal/integrity from availability; real-host startup refusal test | Main local policy matrix covered. More HTTP/signature combinations are possible. Guardian-tighten-only is explicit local policy. |
 | Negotiated methods | Host-handler tests skip unevaluated methods without creating dangling result references | Compact negative-ServerHello matrix still useful; compare `A/common/test_methods_evaluated.py`. Do not advertise extra hooks to match another host. |
 | Emissions | New CaptureGuardian runtime cases and existing parallel-call tests | Only the flows listed above have new independent emission evidence. |
-| Crypto | `test/crypto.test.ts`: HKDF known answer, exact session-ID bytes, wrong-session and legacy keys; new independent capture verifier | Exact signed request/result/error vectors remain useful. Upstream `A/core/test_signing_vectors.py` rejects noncanonical Base64 spellings; our verifier compares decoded bytes and is more permissive. This difference needs a protocol/policy decision, not an unannounced verifier change. |
+| Crypto | `test/crypto.test.ts` and `test/fixtures/signing-vectors.json`: fixed request/result/error canonical inputs and independent HMAC answers, tampering and nonmutation checks | Approved hardening now rejects equivalent-byte Base64 aliases; fixed canonical vectors still pass. See [the hardening decision](enforcement-boundaries.md#base64-policy). |
 
-| MODIFY | `test/enforcer.test.ts` and real-host modified Bash execution | Need an explicit rejected mixed-validity modification leaves the original unchanged test. Rich redaction/path operations stay unsupported; compare `H/modifications.test.ts`. |
-| ASK/DEFER | `test/extension.test.ts` confirms an approved human ASK; source implements other branches | Rejection, UI failure, timeout/default and DEFER fallback need focused tests. Upstream response-expiry semantics and Pi's interactive timer are not identical. |
+| MODIFY | Enforcer and extension tests prove a rejected mixed-validity override leaves the original unchanged; real-host modified Bash execution remains covered | Rich redaction/path operations stay unsupported. |
+| ASK/DEFER | `test/extension.test.ts`: approval/rejection, UI throw/rejection, timeout dispositions, unsupported routes, and bounded DEFER fallback | Unit tests with fake time; not a real interactive UI certification. Upstream response-expiry semantics and Pi's interactive timer are not identical. |
 | Audit failure | `test/audit.test.ts` checks unwritable-file fallback, text omission and counts | Stderr fallback is not durable delivery. Upstream's deny-on-unauditable-proceed behavior is not automatically a requirement to copy. |
-| Result enforcement | Unit hook tests replace denied results/final assistant content | Need real-host proof of text received by the next model request and saved transcript. New emission tests check result acceptance/correlation, not confidentiality or output preservation. |
+| Result enforcement | Four real-host cases exercise DENY/MODIFY after Bash exit 0/1, inspecting the next model request and saved JSONL separately | Original output marker is absent and exact replacement present in both. No streamed-UI or arbitrary-secrecy claim; see [the evidence](enforcement-boundaries.md). |
 
 Run the focused cases from this repository:
 
@@ -100,11 +100,9 @@ npm run lint
 
 ## Follow-up priorities and limits
 
-1. Add real stalled-body and per-method-deadline regression tests.
-2. Add fixed signing/binding vectors; decide canonical Base64 policy before tightening it.
-3. Test real Pi result withholding, then the untested ASK/DEFER and modification-failure branches.
+The three original priorities are now covered by the [enforcement-boundary follow-up](enforcement-boundaries.md). The subsequently approved canonical Base64 hardening is now implemented in both adapters.
 
-No adapter source, supported-method list or conformance claim changed. Tests do not
+The initial emission pass changed no adapter source; the approved follow-up hardens signature acceptance. Supported-method lists and conformance claims are unchanged. Tests do not
 cover all Pi entry points, direct-shell containment, real-model reliability, full
 policy semantics or ACS-Core deployment conformance. Upstream's broader ledger is
 still [issue #33](https://github.com/GenAI-Security-Project/agent-control-standard/issues/33).

@@ -58,7 +58,15 @@ The adapter reconstructs a complete candidate argument object, validates it agai
 
 Schema validation does not prove semantic safety. A string can satisfy a tool schema and still be destructive; that is the Guardian policy's job.
 
+## Tested result withholding
+
+On Pi 0.84.3, real-host DENY/MODIFY tests remove a synthetic Bash output marker from both the next model request and persisted session JSONL, for exit 0 and exit 1. This does not undo execution, certify streamed UI secrecy, or hide content from the Guardian. See [the evidence and limits](docs/enforcement-boundaries.md).
+
 ## Reporting a vulnerability
 
 Do not include secrets, private prompts, or exploit data from third parties in a public issue. Open a minimal GitHub issue asking for a private contact channel, or use GitHub's private vulnerability reporting if it is enabled for the repository.
 
+
+## Canonical signature encoding
+
+Signature values must use standard padded Base64 with zero pad bits and no whitespace or ignored characters. Equivalent-byte noncanonical spellings are rejected before the constant-time MAC comparison. This approved hardening affects signature encoding only, not the literal UTF-8 configured secret. A Guardian emitting aliases must fix its encoder.

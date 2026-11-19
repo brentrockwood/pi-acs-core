@@ -103,6 +103,7 @@ Session keys follow merged ACS §10:
 - info: the exact transmitted ACS `session_id` string, encoded as UTF-8 without normalization
 - output: 32 bytes using HKDF-SHA256
 - signature input: JCS-canonicalized envelope with its signature field removed
+- signature encoding: canonical standard padded Base64; equivalent-byte alternate spellings are rejected
 
 The configured secret must contain at least 32 UTF-8 bytes from a cryptographically secure random source, not a passphrase. Configuration remains literal UTF-8 text: base64-looking values are not decoded. `keyId` remains the configured opaque label.
 

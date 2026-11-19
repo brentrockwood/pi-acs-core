@@ -102,9 +102,11 @@ function sendCompletion(response: import("node:http").ServerResponse, command: s
   response.end("data: [DONE]\n\n");
 }
 
-async function startModelServer(): Promise<ListeningServer> {
+async function startModelServer(requestBodies?: string[]): Promise<ListeningServer> {
   return listen(createServer(async (request, response) => {
-    const payload = JSON.parse(await bodyOf(request)) as { messages?: Array<{ role?: string; content?: unknown }> };
+    const body = await bodyOf(request);
+    requestBodies?.push(body);
+    const payload = JSON.parse(body) as { messages?: Array<{ role?: string; content?: unknown }> };
     const hasToolResult = payload.messages?.some((message) => message.role === "tool") === true;
     const userMessage = payload.messages?.find((message) => message.role === "user");
     const prompt = messageText(userMessage?.content);
@@ -120,6 +122,7 @@ async function runPi(
   enableModify = false,
   startupPosture: "proceed" | "refuse" = "refuse",
   expectCompletion = true,
+  persistSession = false,
 ): Promise<PiRun> {
   const configDirectory = join(directory, "pi-config");
   const sessionDirectory = join(directory, "sessions");
@@ -141,7 +144,7 @@ async function runPi(
   const child = spawn(process.execPath, [
     piCli,
     "--mode", "json",
-    "--no-session",
+    ...(persistSession ? ["--session", join(directory, "transcript.jsonl")] : ["--no-session"]),
     "--session-dir", sessionDirectory,
     "--no-extensions",
     "-e", providerExtension,
@@ -207,9 +210,19 @@ describe("real Pi runtime enforcement", () => {
   let modelServer: ListeningServer | undefined;
   const testDirectories = new Set<string>();
   let refuseHandshake = false;
+  let resultDecision: "deny" | "modify" | undefined;
+  const modelRequests: string[] = [];
+  const replacement = "ACS_RESULT_REPLACEMENT_SYNTHETIC";
   const guardian = createGuardian((request) => {
     if (request.method === "handshake/hello" && refuseHandshake) {
       return { error: { code: -32000, message: "session refused by end-to-end Guardian" } };
+    }
+    if (request.method === "steps/toolCallResult" && resultDecision) {
+      return {
+        result: resultDecision === "deny"
+          ? { decision: "deny", reasoning: replacement }
+          : { decision: "modify", reasoning: "replace synthetic output", modifications: { modified_content: replacement } },
+      };
     }
     if (request.method !== "steps/toolCallRequest") return {};
     const command = commandFrom(request);
@@ -244,7 +257,7 @@ describe("real Pi runtime enforcement", () => {
       response.end(responseBody);
     }));
 
-    modelServer = await startModelServer();
+    modelServer = await startModelServer(modelRequests);
   });
 
   afterAll(async () => {
@@ -320,6 +333,70 @@ describe("real Pi runtime enforcement", () => {
     const audit = (await readFile(join(directory, "audit.jsonl"), "utf8")).trim().split("\n").map((line) => JSON.parse(line) as JsonObject);
     expect(audit.some((event) => event.event === "acs_startup_refused" && event.disposition === "refusal" && event.error_code === -32000)).toBe(true);
     expect(audit.some((event) => event.event === "acs_session_unguarded")).toBe(false);
+  });
+
+  it.each([
+    { decision: "deny", exitCode: 0 },
+    { decision: "deny", exitCode: 1 },
+    { decision: "modify", exitCode: 0 },
+    { decision: "modify", exitCode: 1 },
+  ] as const)("withholds $decision Bash output (exit $exitCode) from the next model request and persisted transcript", async ({ decision, exitCode }) => {
+    const directory = await mkdtemp(join(tmpdir(), "pi-acs-e2e-result-"));
+    testDirectories.add(directory);
+    const original = "ACS_SECRET_RESULT_SYNTHETIC";
+    // Split the marker so its literal presence can only come from output, not the prompt/tool arguments.
+    const command = `printf '%s%s' 'ACS_SECRET_' 'RESULT_SYNTHETIC'; exit ${exitCode}`;
+    const requestOffset = guardian.requests.length;
+    const modelOffset = modelRequests.length;
+    resultDecision = decision;
+    try {
+      await runPi(directory, guardianServer!.url, modelServer!.url, command, true, "refuse", true, true);
+    } finally {
+      resultDecision = undefined;
+    }
+
+    const seen = guardian.requests.slice(requestOffset);
+    const toolRequests = seen.filter((request) => request.method === "steps/toolCallRequest");
+    const toolResults = seen.filter((request) => request.method === "steps/toolCallResult");
+    expect(toolRequests).toHaveLength(1);
+    expect(commandFrom(toolRequests[0]!)).toBe(command);
+    expect(toolResults).toHaveLength(1);
+    expect(toolResults[0]!.params.payload).toMatchObject({
+      tool: { name: "bash" },
+      request_id_ref: toolRequests[0]!.id,
+      exit_status: exitCode === 0 ? "success" : "failure",
+    });
+    // This is post-execution withholding: the command already printed, including before exit 1.
+    expect(JSON.stringify(toolResults[0]!.params.payload.outputs)).toContain(original);
+    const audit = (await readFile(join(directory, "audit.jsonl"), "utf8")).trim().split("\n")
+      .map((line) => JSON.parse(line) as JsonObject);
+    expect(audit).toContainEqual(expect.objectContaining({
+      event: "acs_decision", method: "steps/toolCallResult", request_id: toolResults[0]!.id, decision,
+    }));
+    expect(audit.some((event) => event.event === "acs_decision_failure")).toBe(false);
+    const expectedText = decision === "deny" ? `Blocked by ACS Guardian: ${replacement}` : replacement;
+    const requests = modelRequests.slice(modelOffset);
+    expect(requests).toHaveLength(2);
+    expect(requests[0]).not.toContain(original);
+    expect(requests[0]).not.toContain(replacement);
+    expect(requests[1]).not.toContain(original);
+    expect(requests[1]).toContain(expectedText);
+    const nextRequest = JSON.parse(requests[1]!) as { messages: Array<{ role: string; content: unknown }> };
+    const toolMessages = nextRequest.messages.filter((message) => message.role === "tool");
+    expect(toolMessages).toHaveLength(1);
+    expect(messageText(toolMessages[0]!.content)).toBe(expectedText);
+
+    // Persistence is a separate boundary; neither check says anything about streamed UI output.
+    const transcript = await readFile(join(directory, "transcript.jsonl"), "utf8");
+    expect(transcript).not.toContain(original);
+    expect(transcript).toContain(expectedText);
+    const entries = transcript.trim().split("\n").map((line) => JSON.parse(line) as {
+      type: string; message?: { role: string; content: unknown; isError?: boolean };
+    });
+    const persistedResults = entries.filter((entry) => entry.type === "message" && entry.message?.role === "toolResult");
+    expect(persistedResults).toHaveLength(1);
+    expect(messageText(persistedResults[0]!.message!.content)).toBe(expectedText);
+    expect(persistedResults[0]!.message!.isError).toBe(decision === "deny" || exitCode !== 0);
   });
 
   it("executes the Guardian-modified Bash arguments instead of the model arguments", async () => {

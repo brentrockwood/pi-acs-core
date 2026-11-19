@@ -1,8 +1,9 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { AcsClient } from "../src/client.js";
 import { parseConfig } from "../src/config.js";
-import { deriveSessionKey, signEnvelope, verifyEnvelope } from "../src/crypto.js";
-import type { AcsResponseEnvelope } from "../src/types.js";
+import { canonicalEnvelope, deriveSessionKey, signEnvelope, verifyEnvelope } from "../src/crypto.js";
+import vectors from "./fixtures/signing-vectors.json" with { type: "json" };
+import type { AcsRequestEnvelope, AcsResponseEnvelope } from "../src/types.js";
 
 const sessionId = "6b1f2c9e-4d7a-4e3b-8a51-9c0d2e7f1a36";
 const secret = Buffer.from(Array.from({ length: 32 }, (_, i) => i)).toString("utf8");
@@ -67,5 +68,64 @@ describe("§10 HMAC derivation", () => {
       expect(verifyEnvelope(envelope, key, legacySignature)).toBe(false);
     }
     expect(verifyEnvelope(envelope, deriveSessionKey(secret, sessionId.toUpperCase()), signature)).toBe(false);
+  });
+});
+
+// The fixture pins upstream hand-written JCS inputs and independently computed HMACs.
+// Its intentionally minimal envelopes exercise crypto, not schema validation.
+describe("§10 independent signing vectors", () => {
+  const key = Buffer.from(vectors.keyHex, "hex");
+
+  it.each(vectors.vectors)("$name: fixed input, HMAC, verification and nonmutation", (vector) => {
+    const envelope = structuredClone(vector.envelope) as unknown as AcsRequestEnvelope | AcsResponseEnvelope;
+    const before = structuredClone(envelope);
+    const signature = { algorithm: "HMAC-SHA256" as const, key_id: "lab", value: vector.hmac };
+    expect(canonicalEnvelope(envelope)).toBe(vector.canonical);
+    expect(signEnvelope(envelope, key, "lab")).toEqual(signature);
+    // Verification has an independent expected value, not just our signer's output.
+    expect(verifyEnvelope(envelope, key, signature)).toBe(true);
+    expect(envelope).toEqual(before);
+
+    const container = "params" in envelope ? envelope.params : envelope.result ?? envelope.error!;
+    container.signature = signature;
+    const signedBefore = structuredClone(envelope);
+    expect(canonicalEnvelope(envelope)).toBe(vector.canonical);
+    expect(signEnvelope(envelope, key, "lab")).toEqual(signature);
+    expect(verifyEnvelope(envelope, key, signEnvelope(envelope, key, "lab"))).toBe(true);
+    expect(envelope).toEqual(signedBefore);
+
+    expect(verifyEnvelope(envelope, Buffer.alloc(32, 255), signature)).toBe(false);
+    expect(verifyEnvelope({ ...envelope, id: "tampered" }, key, signature)).toBe(false);
+    const changedMac = Buffer.from(vector.hmac, "base64");
+    changedMac[0] = changedMac[0]! ^ 1;
+    expect(verifyEnvelope(envelope, key, { ...signature, value: changedMac.toString("base64") })).toBe(false);
+    for (const value of ["", "not base64!", "AA==", Buffer.alloc(33).toString("base64")]) {
+      expect(verifyEnvelope(envelope, key, { ...signature, value })).toBe(false);
+    }
+    expect(envelope).toEqual(signedBefore);
+  });
+
+  it.each(vectors.vectors)("$name: rejects noncanonical Base64 aliases", (vector) => {
+    const alphabet = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
+    const value = vector.hmac;
+    const alias = value.slice(0, -2) + alphabet[alphabet.indexOf(value.at(-2)!) | 3] + "=";
+    const spellings = [
+      alias,
+      value + "=",
+      value.slice(0, -1),
+      value.slice(0, 5) + " \t\r\n" + value.slice(5),
+      value.slice(0, 5) + "!" + value.slice(5),
+    ];
+    const base64url = value.replaceAll("+", "-").replaceAll("/", "_");
+    if (base64url !== value) spellings.push(base64url);
+    for (const spelling of spellings) {
+      expect(spelling).not.toBe(value);
+      expect(Buffer.from(spelling, "base64")).toEqual(Buffer.from(value, "base64"));
+      expect(verifyEnvelope(
+        vector.envelope as unknown as AcsRequestEnvelope | AcsResponseEnvelope,
+        key,
+        { algorithm: "HMAC-SHA256", key_id: "lab", value: spelling },
+      )).toBe(false);
+    }
   });
 });

@@ -1,5 +1,7 @@
 # Coverage and conformance boundary
 
+The [enforcement-boundary follow-up](enforcement-boundaries.md) records deadline/binding regressions, independent signing vectors, and the current Base64 hardening decision.
+
 Independent upstream emission validation and the reference-test coverage comparison are recorded in [Upstream emission tests — 2026-11-19](upstream-emission.md). That evidence covers the listed real-host flows, not every advertised capability or full ACS-Core conformance.
 
 Target contracts:
